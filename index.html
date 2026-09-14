@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Caerleon Profit Calculator</title>
+<link rel="stylesheet" href="styles.css">
+<script src="chart.umd.min.js"></script>
+</head>
+<body>
+<div class="app">
+  <!-- ========== HEADER ========== -->
+  <header class="header">
+    <div class="header-inner">
+      <h1>⚔️ Caerleon Profit Calculator</h1>
+      <button id="themeToggle" class="icon-btn" title="Cambiar tema">🌓</button>
+    </div>
+    <nav class="tabs">
+      <button class="tab active" data-tab="calc">Calculadora</button>
+      <button class="tab" data-tab="precios">Precios</button>
+      <button class="tab" data-tab="registro">Registro <span id="registroCount" class="badge">0</span></button>
+      <button class="tab" data-tab="dashboard">Dashboard</button>
+      <button class="tab" data-tab="settings">Configuración</button>
+    </nav>
+  </header>
+
+  <main class="main">
+    <!-- ========== TAB: CALCULADORA ========== -->
+    <section id="tab-calc" class="tab-content active">
+      <!-- Configuración -->
+      <div class="card">
+        <div class="card-header">⚙️ Configuración</div>
+        <div class="card-body row gap-3 wrap">
+          <label class="switch-row">
+            <span>Premium activo</span>
+            <input type="checkbox" id="cfgPremium" checked>
+            <span class="switch-slider"></span>
+            <span class="hint" id="cfgTaxHint">Tax: 4%</span>
+          </label>
+          <span class="debug-tax" id="debugTax"></span>
+        </div>
+      </div>
+
+      <!-- Datos de la operación -->
+      <div class="card">
+        <div class="card-header">🛒 Datos de la Operación</div>
+        <div class="card-body grid-2">
+          <div class="field">
+            <label>Tipo de objeto</label>
+            <select id="inTipo"></select>
+          </div>
+          <div class="field">
+            <label>Tier</label>
+            <select id="inTier">
+              <option>4</option><option>5</option><option>6</option><option>7</option><option>8</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Encantamiento inicial</label>
+            <select id="inEnchIni">
+              <option>0</option><option>1</option><option>2</option><option>3</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Encantamiento final</label>
+            <select id="inEnchFin">
+              <option>0</option><option>1</option><option>2</option><option selected>3</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Calidad (opcional)</label>
+            <select id="inCalidad">
+              <option>Normal</option>
+              <option>Bueno</option>
+              <option>Notable</option>
+              <option>Excelente</option>
+              <option>Obra maestra</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Cantidad</label>
+            <input type="number" id="inQty" value="1" min="1" step="1">
+          </div>
+          <div class="field">
+            <label>Precio de compra unit.</label>
+            <input type="number" id="inPCompra" value="0" min="0" step="1">
+          </div>
+          <div class="field">
+            <label>Precio de venta unit.</label>
+            <input type="number" id="inPVenta" value="0" min="0" step="1">
+          </div>
+          <div class="field full">
+            <label id="inPDirLabel">Precio del item final en mercado (opcional)</label>
+            <input type="number" id="inPDir" value="0" min="0" step="1" placeholder="0">
+            <small class="hint">Para comparar tu ruta vs comprar el item ya encantado</small>
+          </div>
+        </div>
+        <div class="item-preview" id="itemPreview"></div>
+      </div>
+
+      <!-- Materiales -->
+      <div class="card">
+        <div class="card-header">📦 Materiales Necesarios</div>
+        <div class="card-body">
+          <table class="data-table mat-table">
+            <thead><tr><th>Material</th><th>Cantidad</th><th>Precio unit.</th><th>Costo total</th></tr></thead>
+            <tbody>
+              <tr><td class="mat-cell"><img class="mat-icon" data-mat="runa"  src="https://render.albiononline.com/v1/item/T5_RUNE.png"  alt="Runa"><span>Runas</span></td><td id="matRunaQty">0</td><td id="matRunaPrecio">0</td><td id="matRunaCosto">0</td></tr>
+              <tr><td class="mat-cell"><img class="mat-icon" data-mat="alma"  src="https://render.albiononline.com/v1/item/T5_SOUL.png"  alt="Alma"><span>Almas</span></td><td id="matAlmaQty">0</td><td id="matAlmaPrecio">0</td><td id="matAlmaCosto">0</td></tr>
+              <tr><td class="mat-cell"><img class="mat-icon" data-mat="relic" src="https://render.albiononline.com/v1/item/T5_RELIC.png" alt="Reliquia"><span>Reliquias</span></td><td id="matRelicQty">0</td><td id="matRelicPrecio">0</td><td id="matRelicCosto">0</td></tr>
+              <tr class="total-row"><td><strong>TOTAL</strong></td><td id="matTotalQty">0</td><td>—</td><td id="matTotalCosto">0</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Resultados -->
+      <div class="card">
+        <div class="card-header">📊 Resultados de la Operación</div>
+        <div class="card-body grid-2 results-grid">
+          <div class="result-item primary"><span class="result-label">Inversión total</span><span class="result-val" id="rInversion">—</span></div>
+          <div class="result-item"><span class="result-label">Revenue neto</span><span class="result-val" id="rRevNeto">—</span></div>
+          <div class="result-item success big"><span class="result-label">Ganancia neta</span><span class="result-val" id="rProfit">—</span></div>
+          <div class="result-item success"><span class="result-label">Ganancia / unidad</span><span class="result-val" id="rProfitUnit">—</span></div>
+          <div class="result-item"><span class="result-label">Margen %</span><span class="result-val" id="rMargen">—</span></div>
+          <div class="result-item"><span class="result-label">ROI %</span><span class="result-val" id="rROI">—</span></div>
+          <div class="result-item"><span class="result-label">Break-even price</span><span class="result-val" id="rBreakeven">—</span></div>
+          <div class="result-item"><span class="result-label">Eficiencia material %</span><span class="result-val" id="rEficiencia">—</span></div>
+        </div>
+        <div class="card-meta-line" id="cardMetaLine">
+          <span>IP: <span id="rIP">—</span></span>
+          <span>Materiales: <span id="rMatUnit">—</span>/u</span>
+          <span>Costo item: <span id="rCostBase">—</span></span>
+        </div>
+      </div>
+
+      <!-- Costo de oportunidad -->
+      <div class="card">
+        <div class="card-header">🔄 Costo de Oportunidad</div>
+        <div class="card-body">
+          <table class="data-table">
+            <tbody>
+              <tr><td>Tu costo total (base + materiales × qty)</td><td id="oppTuCosto">—</td></tr>
+              <tr><td>Costo si compraras el item ya en <span id="oppEnchLabel">.3</span> directo</td><td id="oppDirecto">—</td></tr>
+              <tr><td>Ahorro con tu ruta de upgrade</td><td id="oppAhorro">—</td></tr>
+              <tr><td>Ganancia alternativa (comprar directo y vender)</td><td id="oppGananciaAlt">—</td></tr>
+              <tr class="total-row"><td><strong>¿Conviene tu ruta?</strong></td><td id="oppVeredicto">—</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Estado + Guardar -->
+      <div class="card">
+        <div class="card-header">🚦 Estado vs Histórico</div>
+        <div class="card-body">
+          <div class="estado-badge" id="estadoBadge">Sin datos</div>
+          <button id="btnGuardar" class="btn btn-primary btn-large">💾 Guardar operación en Registro</button>
+          <p class="hint">Se guardará con la fecha de hoy. La próxima vez que abras la web, todo seguirá aquí.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== TAB: PRECIOS ========== -->
+    <section id="tab-precios" class="tab-content">
+      <div class="card">
+        <div class="card-header">💰 Precios de Materiales (por unidad)</div>
+        <div class="card-body">
+          <p class="hint">Edita los precios a los que TÚ compraste cada material. Se usan en todas las operaciones.</p>
+          <table class="data-table editable-table">
+            <thead><tr><th>Tier</th><th><img class="header-icon" data-mat="runa"  src="https://render.albiononline.com/v1/item/T5_RUNE.png"  alt="">Runa</th><th><img class="header-icon" data-mat="alma"  src="https://render.albiononline.com/v1/item/T5_SOUL.png"  alt="">Alma</th><th><img class="header-icon" data-mat="relic" src="https://render.albiononline.com/v1/item/T5_RELIC.png" alt="">Reliquia</th></tr></thead>
+            <tbody id="preciosBody"></tbody>
+          </table>
+          <button id="btnGuardarPrecios" class="btn btn-primary">💾 Guardar Precios</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== TAB: REGISTRO ========== -->
+    <section id="tab-registro" class="tab-content">
+      <div class="card">
+        <div class="card-header">
+          <span>📜 Registro de Operaciones</span>
+          <span class="badge" id="regCountHeader">0 operaciones</span>
+        </div>
+        <div class="card-body">
+          <div class="filters row gap-2 wrap">
+            <input type="text" id="regSearch" placeholder="🔍 Buscar por tipo/tier/notas..." class="search-input">
+            <select id="regFilterTipo">
+              <option value="">Todos los tipos</option>
+            </select>
+            <select id="regFilterEstado">
+              <option value="">Todos los estados</option>
+              <option>🟢 Excelente</option>
+              <option>🟡 Buena</option>
+              <option>🔵 Bulk Win</option>
+              <option>🟠 Marginal</option>
+              <option>🔴 Pérdida</option>
+            </select>
+            <button id="btnLimpiarFiltros" class="btn btn-secondary">Limpiar filtros</button>
+          </div>
+          <div class="table-scroll">
+            <table class="data-table registro-table">
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th>Tipo</th>
+                  <th>Tier</th>
+                  <th>Enc.</th>
+                  <th>Cant.</th>
+                  <th>P.Compra</th>
+                  <th>P.Venta</th>
+                  <th>Inversión</th>
+                  <th>Revenue</th>
+                  <th>Ganancia</th>
+                  <th>ROI</th>
+                  <th>Estado</th>
+                  <th>Notas</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="registroBody"></tbody>
+            </table>
+          </div>
+          <p class="hint" id="regEmpty" style="display:none;">📭 Sin operaciones registradas todavía. Ve a Calculadora y guarda tu primera.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== TAB: DASHBOARD ========== -->
+    <section id="tab-dashboard" class="tab-content">
+      <!-- Period selector + Goal config -->
+      <div class="dashboard-toolbar">
+        <div class="period-selector">
+          <label>Período</label>
+          <select id="dashPeriod">
+            <option value="week">Última semana</option>
+            <option value="month" selected>Mes</option>
+            <option value="custom">Por fecha</option>
+          </select>
+          <select id="dashMonthSelect" class="hidden">
+            <!-- populated by JS -->
+          </select>
+        </div>
+        <div class="goal-config" id="goalConfig">
+          <label>Meta</label>
+          <input type="number" id="dashGoalAmount" value="1000000" min="0" step="100000">
+          <select id="dashGoalPeriod">
+            <option value="day">diaria</option>
+            <option value="week">semanal</option>
+            <option value="month" selected>mensual</option>
+          </select>
+        </div>
+      </div>
+      <div class="period-custom hidden" id="periodCustom">
+        <label>Desde</label>
+        <input type="date" id="dashDateFrom">
+        <label>Hasta</label>
+        <input type="date" id="dashDateTo">
+      </div>
+
+      <div class="kpi-grid" id="kpiGrid"></div>
+
+      <!-- Comparative chart: current vs previous period -->
+      <div class="chart-card">
+        <div class="chart-header-row">
+          <div>
+            <div class="chart-title">Profit por día</div>
+            <div class="chart-subtitle">Sólidas = período actual · gris = período anterior</div>
+          </div>
+          <div class="chart-trend-pill" id="compareTrend">—</div>
+        </div>
+        <canvas id="chartCompare"></canvas>
+      </div>
+
+      <div class="grid-2-cards">
+        <div class="chart-card">
+          <div class="chart-title">Distribución por estado</div>
+          <div class="chart-subtitle">Cómo se reparten tus operaciones</div>
+          <div class="donut-wrapper">
+            <canvas id="chartStatus"></canvas>
+            <div class="donut-center">
+              <div class="donut-center-value" id="donutCenterValue">0</div>
+              <div class="donut-center-label">Operaciones</div>
+            </div>
+          </div>
+          <div class="donut-legend" id="donutLegend"></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">Meta del período</div>
+          <div class="chart-subtitle">Progreso hacia tu objetivo</div>
+          <div class="gauge-wrapper">
+            <canvas id="chartGauge"></canvas>
+            <div class="gauge-center">
+              <div class="gauge-value" id="gaugeValue">0%</div>
+              <div class="gauge-label" id="gaugeLabel">de la meta</div>
+            </div>
+          </div>
+          <div class="goal-meta-info" id="goalMetaInfo">
+            <span id="goalRemaining">— restantes</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-2-cards">
+        <div class="chart-card">
+          <div class="chart-title">Profit por tier</div>
+          <div class="chart-subtitle">Cuál te deja más silver</div>
+          <canvas id="chartTier"></canvas>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">Profit por tipo de objeto</div>
+          <div class="chart-subtitle">Cuál item es tu fuerte</div>
+          <canvas id="chartTipo" style="max-height: 220px;"></canvas>
+        </div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-title">Top operaciones</div>
+        <div class="chart-subtitle">Tus mejores trades del período</div>
+        <div class="performer-list" id="performerList"></div>
+      </div>
+    </section>
+
+    <!-- ========== TAB: SETTINGS ========== -->
+    <section id="tab-settings" class="tab-content">
+      <div class="card">
+        <div class="card-header">💾 Datos y Respaldo</div>
+        <div class="card-body">
+          <p>Tu data se guarda automáticamente en este navegador (localStorage). Para usarla en otro dispositivo, expórtala y luego impórtala allá.</p>
+          <div class="row gap-2 wrap">
+            <button id="btnExport" class="btn btn-primary">📤 Exportar JSON</button>
+            <button id="btnImport" class="btn btn-secondary">📥 Importar JSON</button>
+            <input type="file" id="fileImport" accept=".json" style="display:none">
+            <button id="btnClear" class="btn btn-danger">🗑️ Borrar todo</button>
+          </div>
+          <div id="storageInfo" class="hint" style="margin-top: 1rem;"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">ℹ️ Acerca de</div>
+        <div class="card-body">
+          <p><strong>Caerleon Profit Calculator</strong> — Para Albion Online.</p>
+          <p>Calcula profits de Black Market (Caerleon) considerando materiales, encantamientos y tax.</p>
+          <p class="hint">Tax: 4% con Premium, 8% sin Premium. Materiales por paso: 2H=384, 1H=288, Pecho/Bolsa=192, Cabeza/Pies/Capa/Secundaria=96.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
