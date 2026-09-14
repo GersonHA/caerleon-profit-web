@@ -47,8 +47,10 @@ const SYNC_FILENAME = 'caerleon-profit-data.json';
 
 // GitHub Gist sync state
 let syncConfig = loadSyncConfig();
-let syncStatus = { state: 'idle', msg: 'Sin sincronizar', lastSync: null };
+let syncStatus = { state: 'idle', msg: 'Sin sincronizar', lastSync: null, remoteUpdated: null };
 let syncTimer = null;
+let syncInterval = null;
+let syncInFlight = false;
 
 // =====================================================
 // STATE (carga desde localStorage o inicializa)
@@ -224,6 +226,9 @@ async function pushToGist() {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.message || `Error subiendo (${res.status})`);
     }
+    const data = await res.json();
+    // Track new remote timestamp to prevent auto-sync from re-pulling our own changes
+    if (data.updated_at) syncStatus.remoteUpdated = data.updated_at;
     syncStatus.lastSync = new Date();
     setSyncStatus('ok', `✅ Sincronizado ${syncStatus.lastSync.toLocaleTimeString()}`);
     return true;
@@ -241,7 +246,8 @@ async function pullFromGist() {
   }
   setSyncStatus('syncing', 'Descargando de la nube…');
   try {
-    const res = await gistApi(`/gists/${syncConfig.gistId}`, 'GET', null, syncConfig.token);
+    // Cache-bust to avoid stale API responses
+    const res = await gistApi(`/gists/${syncConfig.gistId}?_=${Date.now()}`, 'GET', null, syncConfig.token);
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.message || `Error descargando (${res.status})`);
@@ -250,11 +256,19 @@ async function pullFromGist() {
     const file = data.files[SYNC_FILENAME] || Object.values(data.files)[0];
     if (!file) throw new Error('Gist sin archivo de datos');
     const remote = JSON.parse(file.content);
+    if (data.updated_at) syncStatus.remoteUpdated = data.updated_at;
+    console.log('[Sync Pull] Recibido:', {
+      hasPrecios: !!remote.precios,
+      hasRegistro: !!remote.registro,
+      registroCount: remote.registro?.length || 0,
+      updated: remote.updated,
+    });
     if (!remote.precios || !remote.registro) throw new Error('Formato de datos inválido');
 
     const remoteCount = remote.registro.length;
     const localCount = state.registro.length;
-    const msg = `La nube tiene ${remoteCount} operaciones, tú tienes ${localCount} aquí.`;
+    const updatedRemote = remote.updated ? ` (subido ${new Date(remote.updated).toLocaleString()})` : '';
+    const msg = `La nube tiene ${remoteCount} operaciones${updatedRemote}, tú tienes ${localCount} aquí.`;
     let apply = false;
     if (remoteCount === 0 && localCount === 0) {
       apply = true; // both empty
@@ -270,8 +284,10 @@ async function pullFromGist() {
       return false;
     }
 
-    state.precios = remote.precios;
-    state.registro = remote.registro;
+    // SMART MERGE for manual pull too (in case local has unique items)
+    const merge = mergeRegistros(state.registro, remote.registro);
+    state.registro = merge.merged;
+    state.precios = mergePrecios(state.precios, remote.precios);
     if (remote.premium !== undefined) state.premium = remote.premium;
     saveState();
     initPrecios();
@@ -281,8 +297,15 @@ async function pullFromGist() {
     updateStorageInfo();
 
     syncStatus.lastSync = new Date();
-    setSyncStatus('ok', `⬇️ ${remoteCount} operaciones traídas de la nube`);
-    showToast(`☁️ ${remoteCount} operaciones sincronizadas`, 'success');
+    if (merge.addedFromRemote > 0 && merge.keptUniqueLocal > 0) {
+      setSyncStatus('ok', `⬇️ Merge · ${merge.keptUniqueLocal} locales + ${merge.addedFromRemote} remotas = ${merge.merged.length}`);
+      showToast(`☁️ Merge: ${merge.merged.length} ops totales`, 'success');
+    } else {
+      setSyncStatus('ok', `⬇️ ${remoteCount} operaciones traídas${updatedRemote}`);
+      showToast(`☁️ ${remoteCount} operaciones sincronizadas`, 'success');
+    }
+    // Push merged state up so gist has all items
+    scheduleSyncPush();
     return true;
   } catch (e) {
     console.error('Sync pull error:', e);
@@ -299,6 +322,160 @@ function scheduleSyncPush() {
     syncTimer = null;
     pushToGist();
   }, 3000);
+}
+
+// =====================================================
+// SMART MERGE (combine local + remote to avoid data loss)
+// =====================================================
+
+function mergeRegistros(localReg, remoteReg) {
+  // Build a Set of existing IDs to dedupe
+  const localIds = new Set(localReg.map(r => r.id));
+  const remoteIds = new Set(remoteReg.map(r => r.id));
+  // Items unique to remote (not in local) → add them
+  const newFromRemote = remoteReg.filter(r => !localIds.has(r.id));
+  // Items unique to local (not in remote) → keep them (they exist only here)
+  const uniqueToLocal = localReg.filter(r => !remoteIds.has(r.id));
+  // Combine: local items first (in their original order), then new remote items
+  return {
+    merged: [...uniqueToLocal, ...newFromRemote],
+    addedFromRemote: newFromRemote.length,
+    keptUniqueLocal: uniqueToLocal.length,
+  };
+}
+
+function mergePrecios(localP, remoteP) {
+  // For each tier+material, use the most recent non-zero value
+  const result = structuredClone(localP);
+  for (const tier of Object.keys(remoteP)) {
+    if (!result[tier]) result[tier] = { runa: 0, alma: 0, relic: 0 };
+    for (const mat of ['runa', 'alma', 'relic']) {
+      const rv = remoteP[tier]?.[mat] || 0;
+      const lv = result[tier][mat] || 0;
+      // Take remote if local is 0/default, otherwise keep local
+      result[tier][mat] = lv > 0 ? lv : rv;
+    }
+  }
+  return result;
+}
+
+// =====================================================
+// AUTO-SYNC (background polling for true cross-device sync)
+// =====================================================
+
+async function checkRemoteChanges({ silent = true } = {}) {
+  if (!syncConfig || !syncConfig.token || !syncConfig.gistId) return false;
+  if (syncInFlight) return false;
+  syncInFlight = true;
+  try {
+    const res = await gistApi(`/gists/${syncConfig.gistId}?_=${Date.now()}`, 'GET', null, syncConfig.token);
+    if (!res.ok) return false;
+    const data = await res.json();
+    const remoteUpdated = data.updated_at;
+
+    // First time we see this remote, just record it
+    if (syncStatus.remoteUpdated === null) {
+      syncStatus.remoteUpdated = remoteUpdated;
+      return false;
+    }
+
+    // No change → no-op
+    if (syncStatus.remoteUpdated === remoteUpdated) {
+      return false;
+    }
+
+    // Remote changed! Track new timestamp first to prevent loops
+    const oldTimestamp = syncStatus.remoteUpdated;
+    syncStatus.remoteUpdated = remoteUpdated;
+
+    console.log('[AutoSync] Remote changed:', { old: oldTimestamp, new: remoteUpdated });
+    const file = data.files[SYNC_FILENAME] || Object.values(data.files)[0];
+    if (!file) return false;
+    const remote = JSON.parse(file.content);
+    const remoteCount = remote.registro?.length || 0;
+    const localCount = state.registro.length;
+
+    // Decide: auto-apply, merge, or ask user?
+    if (localCount === 0) {
+      // Local is empty, auto-pull silently
+      await applyRemoteData(remote, silent);
+      if (!silent) showToast(`☁️ ${remoteCount} operaciones auto-actualizadas`, 'success');
+    } else {
+      // SMART MERGE: combine unique items from both sides
+      const merge = mergeRegistros(state.registro, remote.registro);
+      console.log('[AutoSync] Smart merge:', merge);
+      if (merge.addedFromRemote > 0) {
+        // Merge succeeded: new items from remote added to local
+        state.registro = merge.merged;
+        state.precios = mergePrecios(state.precios, remote.precios);
+        saveState();
+        initPrecios();
+        updateCalculadora();
+        updateRegistro();
+        updateDashboard();
+        updateStorageInfo();
+        syncStatus.lastSync = new Date();
+        setSyncStatus('ok', `☁️ Merge · ${merge.keptUniqueLocal} locales + ${merge.addedFromRemote} remotas = ${merge.merged.length} total`);
+        if (!silent) showToast(`☁️ ${merge.addedFromRemote} ops remotas añadidas (total: ${merge.merged.length})`, 'success');
+        // Schedule a push so the gist knows about our merged state
+        scheduleSyncPush();
+      } else if (merge.keptUniqueLocal > 0) {
+        // No new remote items, but local has unique items → push them up
+        console.log('[AutoSync] Local has unique items remote doesn\'t have, pushing');
+        scheduleSyncPush();
+      } else {
+        // No new items either way — just metadata update
+        setSyncStatus('ok', `☁️ Sync OK · ${merge.merged.length} ops`);
+      }
+    }
+    return true;
+  } catch (e) {
+    console.warn('[AutoSync] Check failed:', e.message);
+    return false;
+  } finally {
+    syncInFlight = false;
+  }
+}
+
+async function applyRemoteData(remote, silent) {
+  state.precios = remote.precios;
+  state.registro = remote.registro;
+  if (remote.premium !== undefined) state.premium = remote.premium;
+  saveState();
+  initPrecios();
+  updateCalculadora();
+  updateRegistro();
+  updateDashboard();
+  updateStorageInfo();
+  syncStatus.lastSync = new Date();
+  setSyncStatus('ok', `☁️ Auto-sync · ${remote.registro.length} ops`);
+  console.log('[AutoSync] Applied remote data:', remote.registro.length, 'ops');
+}
+
+function startAutoSync() {
+  if (syncInterval) return; // Already running
+  // Poll every 30s when tab is visible
+  syncInterval = setInterval(() => {
+    if (!document.hidden && document.visibilityState === 'visible') {
+      checkRemoteChanges({ silent: false });
+    }
+  }, 30000);
+  // Also check immediately when tab becomes visible
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      checkRemoteChanges({ silent: false });
+    }
+  });
+  // And when window gets focus
+  window.addEventListener('focus', () => checkRemoteChanges({ silent: false }));
+  console.log('[AutoSync] Started · polling every 30s when visible');
+}
+
+function stopAutoSync() {
+  if (syncInterval) {
+    clearInterval(syncInterval);
+    syncInterval = null;
+  }
 }
 
 function updateSyncUI() {
@@ -355,15 +532,33 @@ async function handleSyncSave() {
   try {
     const { user } = await testGistConnection(token, gistIdIn || null);
     let gistId = gistIdIn;
-    if (!gistId) {
+    const isNewGist = !gistId;
+    if (isNewGist) {
+      // Warn user before creating a NEW gist (likely accidental)
+      const existingNote = syncConfig ? `\n\nDetecté que ya tienes otro Gist configurado (${syncConfig.gistId?.slice(0,8)}…). ¿Seguro que quieres crear uno NUEVO y dejar el anterior aislado?` : '';
+      if (!confirm(`No ingresaste Gist ID, así que voy a CREAR uno nuevo vacío.${existingNote}\n\nSi quieres conectar con un Gist existente, cancélalo y pega el Gist ID primero.\n\n¿Crear nuevo Gist?`)) {
+        setSyncStatus('idle', 'Cancelado. Pega un Gist ID existente para conectar.');
+        return;
+      }
       setSyncStatus('syncing', 'Creando Gist privado…');
       gistId = await createGist(token);
     }
     saveSyncConfig({ token, gistId, user });
     setSyncStatus('ok', `✅ Conectado como @${user}`);
-    showToast(`☁️ Sincronización activa · Gist ${gistId.slice(0,8)}…`, 'success');
-    // Immediate push of current state
-    setTimeout(pushToGist, 300);
+
+    if (isNewGist) {
+      // New gist → safe to push current local state (both should be empty)
+      showToast(`☁️ Sincronización activa · Gist nuevo creado`, 'success');
+      setTimeout(pushToGist, 300);
+    } else {
+      // Existing gist → DON'T auto-push (could overwrite remote data with empty local)
+      // Instead, trigger an auto-check immediately to pull any remote data
+      showToast(`☁️ Conectado · Sincronizando automáticamente…`, 'success');
+      setSyncStatus('idle', `☁️ Conectado como @${user} · buscando cambios…`);
+      setTimeout(() => checkRemoteChanges({ silent: false }), 500);
+    }
+    // Start background auto-sync polling
+    startAutoSync();
   } catch (e) {
     setSyncStatus('error', `❌ ${e.message}`);
     showToast(`Error: ${e.message}`, 'error');
@@ -391,6 +586,8 @@ async function handleSyncTest() {
 function handleSyncDisconnect() {
   if (!confirm('¿Desconectar la sincronización?\nTu data local y la del Gist NO se borran, solo se deja de sincronizar.')) return;
   clearSyncConfig();
+  stopAutoSync();
+  syncStatus.remoteUpdated = null;
   setSyncStatus('idle', 'Desconectado. Datos solo en este dispositivo.');
   showToast('🔌 Sincronización desconectada', 'info');
 }
@@ -781,7 +978,9 @@ function initPrecios() {
     tbody.appendChild(tr);
   });
 
-  document.getElementById('btnGuardarPrecios').addEventListener('click', () => {
+  // Auto-save on every price change (debounced → triggers saveState() → sync push)
+  let precioSaveTimer = null;
+  function autoSavePrecio() {
     document.querySelectorAll('#preciosBody input').forEach(inp => {
       const tier = parseInt(inp.dataset.tier);
       const mat = inp.dataset.mat;
@@ -789,10 +988,28 @@ function initPrecios() {
       if (!state.precios[tier]) state.precios[tier] = { runa: 0, alma: 0, relic: 0 };
       state.precios[tier][mat] = val;
     });
-    saveState();
-    showToast('✅ Precios guardados', 'success');
-    updateCalculadora();
+    if (precioSaveTimer) clearTimeout(precioSaveTimer);
+    precioSaveTimer = setTimeout(() => {
+      saveState();   // → triggers scheduleSyncPush() if configured
+      updateCalculadora();
+    }, 800);
+  }
+  document.querySelectorAll('#preciosBody input').forEach(inp => {
+    inp.addEventListener('input', autoSavePrecio);
   });
+
+  // Keep the manual button as backup (in case)
+  const btnGuardar = document.getElementById('btnGuardarPrecios');
+  if (btnGuardar) {
+    btnGuardar.addEventListener('click', () => {
+      if (precioSaveTimer) clearTimeout(precioSaveTimer);
+      autoSavePrecio();
+      precioSaveTimer = setTimeout(() => {
+        saveState();
+        showToast('✅ Precios guardados', 'success');
+      }, 100);
+    });
+  }
 }
 
 // =====================================================
@@ -1613,14 +1830,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   initSettings();
 
   // Auto-pull from cloud on init if configured AND local is empty
-  if (syncConfig && syncConfig.token && syncConfig.gistId && state.registro.length === 0) {
-    setTimeout(() => {
-      pullFromGist().then(ok => {
-        if (ok) console.log('☁️ Datos auto-descargados de la nube');
-      });
-    }, 500);
-  } else if (syncConfig && syncConfig.gistId) {
-    setSyncStatus('idle', `☁️ Conectado como @${syncConfig.user || '?'} · listo para sincronizar`);
+  if (syncConfig && syncConfig.token && syncConfig.gistId) {
+    // Start background auto-sync (polls every 30s when tab is visible)
+    startAutoSync();
+    if (state.registro.length === 0) {
+      setTimeout(() => {
+        checkRemoteChanges({ silent: false });
+      }, 500);
+    } else {
+      setSyncStatus('idle', `☁️ Conectado como @${syncConfig.user || '?'} · auto-sync activo`);
+    }
   }
 });
 
