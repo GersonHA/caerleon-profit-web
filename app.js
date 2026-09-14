@@ -42,6 +42,13 @@ const DEFAULT_PRECIOS = {
 };
 
 const STORAGE_KEY = 'caerleon_profit_data_v1';
+const SYNC_CONFIG_KEY = 'caerleon_sync_config_v1';
+const SYNC_FILENAME = 'caerleon-profit-data.json';
+
+// GitHub Gist sync state
+let syncConfig = loadSyncConfig();
+let syncStatus = { state: 'idle', msg: 'Sin sincronizar', lastSync: null };
+let syncTimer = null;
 
 // =====================================================
 // STATE (carga desde localStorage o inicializa)
@@ -90,10 +97,302 @@ function saveState() {
       theme: state.theme,
       premium: state.premium,
     }));
+    // Schedule cloud sync if configured
+    if (syncConfig && syncConfig.token && syncConfig.gistId) {
+      scheduleSyncPush();
+    }
   } catch (e) {
     console.error('Error guardando state:', e);
     showToast('Error guardando datos', 'error');
   }
+}
+
+// =====================================================
+// GITHUB GIST SYNC
+// =====================================================
+
+function loadSyncConfig() {
+  try {
+    const raw = localStorage.getItem(SYNC_CONFIG_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    console.error('Error cargando sync config:', e);
+  }
+  return null;
+}
+
+function saveSyncConfig(cfg) {
+  try {
+    localStorage.setItem(SYNC_CONFIG_KEY, JSON.stringify(cfg));
+    syncConfig = cfg;
+  } catch (e) {
+    console.error('Error guardando sync config:', e);
+  }
+}
+
+function clearSyncConfig() {
+  localStorage.removeItem(SYNC_CONFIG_KEY);
+  syncConfig = null;
+}
+
+function setSyncStatus(state, msg) {
+  syncStatus.state = state;
+  syncStatus.msg = msg;
+  updateSyncUI();
+}
+
+function gistApi(path, method, body, token) {
+  const headers = {
+    'Accept': 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (body) headers['Content-Type'] = 'application/json';
+  return fetch(`https://api.github.com${path}`, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+}
+
+async function testGistConnection(token, gistId) {
+  if (!token) throw new Error('Falta el token');
+  // Verify token by getting user
+  const userRes = await gistApi('/user', 'GET', null, token);
+  if (!userRes.ok) {
+    if (userRes.status === 401) throw new Error('Token inválido o expirado');
+    throw new Error(`Error de autenticación (${userRes.status})`);
+  }
+  const user = await userRes.json();
+  // If gistId provided, verify access
+  if (gistId) {
+    const gistRes = await gistApi(`/gists/${gistId}`, 'GET', null, token);
+    if (!gistRes.ok) {
+      if (gistRes.status === 404) throw new Error('Gist no encontrado o sin acceso');
+      throw new Error(`Error accediendo al gist (${gistRes.status})`);
+    }
+    return { user: user.login, gistId };
+  }
+  return { user: user.login, gistId: null };
+}
+
+async function createGist(token) {
+  const body = {
+    description: 'Caerleon Profit Calculator — synced data',
+    public: false,
+    files: {
+      [SYNC_FILENAME]: {
+        content: JSON.stringify({
+          version: 1,
+          created: new Date().toISOString(),
+          precios: state.precios,
+          registro: state.registro,
+          premium: state.premium,
+        }, null, 2),
+      },
+    },
+  };
+  const res = await gistApi('/gists', 'POST', body, token);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || `Error creando gist (${res.status})`);
+  }
+  const data = await res.json();
+  return data.id;
+}
+
+async function pushToGist() {
+  if (!syncConfig || !syncConfig.token || !syncConfig.gistId) return false;
+  setSyncStatus('syncing', 'Subiendo a la nube…');
+  try {
+    const payload = {
+      description: 'Caerleon Profit Calculator — synced data',
+      files: {
+        [SYNC_FILENAME]: {
+          content: JSON.stringify({
+            version: 1,
+            updated: new Date().toISOString(),
+            precios: state.precios,
+            registro: state.registro,
+            premium: state.premium,
+          }, null, 2),
+        },
+      },
+    };
+    const res = await gistApi(`/gists/${syncConfig.gistId}`, 'PATCH', payload, syncConfig.token);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || `Error subiendo (${res.status})`);
+    }
+    syncStatus.lastSync = new Date();
+    setSyncStatus('ok', `✅ Sincronizado ${syncStatus.lastSync.toLocaleTimeString()}`);
+    return true;
+  } catch (e) {
+    console.error('Sync push error:', e);
+    setSyncStatus('error', `❌ ${e.message}`);
+    return false;
+  }
+}
+
+async function pullFromGist() {
+  if (!syncConfig || !syncConfig.token || !syncConfig.gistId) {
+    showToast('Configura la sincronización primero', 'warn');
+    return false;
+  }
+  setSyncStatus('syncing', 'Descargando de la nube…');
+  try {
+    const res = await gistApi(`/gists/${syncConfig.gistId}`, 'GET', null, syncConfig.token);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || `Error descargando (${res.status})`);
+    }
+    const data = await res.json();
+    const file = data.files[SYNC_FILENAME] || Object.values(data.files)[0];
+    if (!file) throw new Error('Gist sin archivo de datos');
+    const remote = JSON.parse(file.content);
+    if (!remote.precios || !remote.registro) throw new Error('Formato de datos inválido');
+
+    const remoteCount = remote.registro.length;
+    const localCount = state.registro.length;
+    const msg = `La nube tiene ${remoteCount} operaciones, tú tienes ${localCount} aquí.`;
+    let apply = false;
+    if (remoteCount === 0 && localCount === 0) {
+      apply = true; // both empty
+    } else if (remoteCount === 0) {
+      apply = confirm(`${msg}\n\nLa nube está vacía. ¿Reemplazar con datos vacíos?\n(Cancela para conservar tus datos locales)`);
+    } else if (localCount === 0) {
+      apply = true; // local empty, take remote
+    } else {
+      apply = confirm(`${msg}\n\n¿Reemplazar tus datos locales con los de la nube?\n(Cancela para conservar lo que tienes aquí)`);
+    }
+    if (!apply) {
+      setSyncStatus('idle', 'Sincronización cancelada — datos locales intactos');
+      return false;
+    }
+
+    state.precios = remote.precios;
+    state.registro = remote.registro;
+    if (remote.premium !== undefined) state.premium = remote.premium;
+    saveState();
+    initPrecios();
+    updateCalculadora();
+    updateRegistro();
+    updateDashboard();
+    updateStorageInfo();
+
+    syncStatus.lastSync = new Date();
+    setSyncStatus('ok', `⬇️ ${remoteCount} operaciones traídas de la nube`);
+    showToast(`☁️ ${remoteCount} operaciones sincronizadas`, 'success');
+    return true;
+  } catch (e) {
+    console.error('Sync pull error:', e);
+    setSyncStatus('error', `❌ ${e.message}`);
+    showToast(`Error: ${e.message}`, 'error');
+    return false;
+  }
+}
+
+function scheduleSyncPush() {
+  if (syncTimer) clearTimeout(syncTimer);
+  setSyncStatus('warn', '⏱ Sync programado en 3s…');
+  syncTimer = setTimeout(() => {
+    syncTimer = null;
+    pushToGist();
+  }, 3000);
+}
+
+function updateSyncUI() {
+  const statusEl = document.getElementById('syncStatus');
+  const tokenInput = document.getElementById('ghToken');
+  const gistInput = document.getElementById('ghGistId');
+  const btnSyncNow = document.getElementById('btnSyncNow');
+  const btnSyncPull = document.getElementById('btnSyncPull');
+  const btnDisconnect = document.getElementById('btnSyncDisconnect');
+
+  if (!statusEl) return;
+
+  const connected = syncConfig && syncConfig.token && syncConfig.gistId;
+
+  // Fill inputs if not focused
+  if (tokenInput && document.activeElement !== tokenInput) {
+    tokenInput.value = syncConfig?.token || '';
+  }
+  if (gistInput && document.activeElement !== gistInput) {
+    gistInput.value = syncConfig?.gistId || '';
+  }
+
+  // Toggle buttons
+  if (btnSyncNow)   btnSyncNow.classList.toggle('hidden', !connected);
+  if (btnSyncPull)  btnSyncPull.classList.toggle('hidden', !connected);
+  if (btnDisconnect) btnDisconnect.classList.toggle('hidden', !connected);
+
+  // Status pill
+  const dotClass = syncStatus.state;
+  const lastSyncText = syncStatus.lastSync
+    ? `Última sync: ${syncStatus.lastSync.toLocaleString()}`
+    : '';
+  const userText = syncConfig?.user ? ` · @${syncConfig.user}` : '';
+  statusEl.className = 'hint ' + dotClass;
+  statusEl.innerHTML = `
+    <div class="row gap-2 wrap" style="align-items:center;">
+      <span class="sync-status ${dotClass}">
+        <span class="dot"></span>
+        ${syncStatus.msg}
+      </span>
+      ${connected ? `<span class="hint">${lastSyncText}${userText}</span>` : ''}
+    </div>
+  `;
+}
+
+async function handleSyncSave() {
+  const token = document.getElementById('ghToken').value.trim();
+  const gistIdIn = document.getElementById('ghGistId').value.trim();
+  if (!token) {
+    showToast('Pega tu GitHub Token primero', 'warn');
+    return;
+  }
+  setSyncStatus('syncing', 'Probando conexión…');
+  try {
+    const { user } = await testGistConnection(token, gistIdIn || null);
+    let gistId = gistIdIn;
+    if (!gistId) {
+      setSyncStatus('syncing', 'Creando Gist privado…');
+      gistId = await createGist(token);
+    }
+    saveSyncConfig({ token, gistId, user });
+    setSyncStatus('ok', `✅ Conectado como @${user}`);
+    showToast(`☁️ Sincronización activa · Gist ${gistId.slice(0,8)}…`, 'success');
+    // Immediate push of current state
+    setTimeout(pushToGist, 300);
+  } catch (e) {
+    setSyncStatus('error', `❌ ${e.message}`);
+    showToast(`Error: ${e.message}`, 'error');
+  }
+}
+
+async function handleSyncTest() {
+  const token = document.getElementById('ghToken').value.trim();
+  const gistId = document.getElementById('ghGistId').value.trim();
+  if (!token) {
+    showToast('Pega tu GitHub Token primero', 'warn');
+    return;
+  }
+  setSyncStatus('syncing', 'Probando…');
+  try {
+    const { user, gistId: foundId } = await testGistConnection(token, gistId || null);
+    setSyncStatus('ok', `✅ Token válido (@${user})${gistId ? ` · Gist accesible` : ''}`);
+    showToast(`Token OK como @${user}`, 'success');
+  } catch (e) {
+    setSyncStatus('error', `❌ ${e.message}`);
+    showToast(`Error: ${e.message}`, 'error');
+  }
+}
+
+function handleSyncDisconnect() {
+  if (!confirm('¿Desconectar la sincronización?\nTu data local y la del Gist NO se borran, solo se deja de sincronizar.')) return;
+  clearSyncConfig();
+  setSyncStatus('idle', 'Desconectado. Datos solo en este dispositivo.');
+  showToast('🔌 Sincronización desconectada', 'info');
 }
 
 // Period date range computation
@@ -1102,10 +1401,18 @@ function initSettings() {
   document.getElementById('fileImport').addEventListener('change', importarJSON);
   document.getElementById('btnClear').addEventListener('click', borrarTodo);
 
+  // GitHub Gist sync
+  document.getElementById('btnSyncSave').addEventListener('click', handleSyncSave);
+  document.getElementById('btnSyncTest').addEventListener('click', handleSyncTest);
+  document.getElementById('btnSyncNow').addEventListener('click', pushToGist);
+  document.getElementById('btnSyncPull').addEventListener('click', pullFromGist);
+  document.getElementById('btnSyncDisconnect').addEventListener('click', handleSyncDisconnect);
+
   // Dashboard period/goal controls
   populateMonthSelect();
   setupDashboardControls();
   updateStorageInfo();
+  updateSyncUI();
 }
 
 function setupDashboardControls() {
@@ -1286,7 +1593,7 @@ function showToast(msg, type = 'info') {
 // INIT
 // =====================================================
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   // Update all hardcoded icon paths to match current IMG_BASE
   // (so if user changes IMG_BASE, all icons update automatically)
   // Material icons default to T5 (will be updated when user changes tier in calculator)
@@ -1304,6 +1611,17 @@ document.addEventListener('DOMContentLoaded', () => {
   initRegistro();
   initDashboard();
   initSettings();
+
+  // Auto-pull from cloud on init if configured AND local is empty
+  if (syncConfig && syncConfig.token && syncConfig.gistId && state.registro.length === 0) {
+    setTimeout(() => {
+      pullFromGist().then(ok => {
+        if (ok) console.log('☁️ Datos auto-descargados de la nube');
+      });
+    }, 500);
+  } else if (syncConfig && syncConfig.gistId) {
+    setSyncStatus('idle', `☁️ Conectado como @${syncConfig.user || '?'} · listo para sincronizar`);
+  }
 });
 
 // Expose delete function globally for onclick

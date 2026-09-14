@@ -1181,3 +1181,89 @@ canvas {
   .icon-btn:active,
   .kpi-card:hover { transform: none !important; }
 }
+
+/* ========== GIST SYNC ========== */
+.gist-help {
+  background: var(--bg-tertiary, rgba(99, 102, 241, 0.05));
+  border: 1px solid var(--border, rgba(99, 102, 241, 0.15));
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-top: 0.5rem;
+}
+.gist-help summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text-primary);
+  user-select: none;
+}
+.gist-help summary:hover { color: var(--accent, #6366f1); }
+.gist-help ol { margin: 0.5rem 0 0 0; padding-left: 1.2rem; }
+.gist-help code {
+  background: var(--bg-secondary, rgba(0,0,0,0.05));
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 0.85em;
+}
+.gist-help a {
+  color: var(--accent, #6366f1);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--accent, #6366f1);
+}
+.gist-help a:hover { border-bottom-style: solid; }
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+@media (max-width: 600px) {
+  .form-grid { grid-template-columns: 1fr; }
+}
+
+.sync-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  background: var(--bg-tertiary, rgba(99, 102, 241, 0.08));
+  border: 1px solid var(--border, rgba(99, 102, 241, 0.2));
+}
+.sync-status .dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.sync-status.ok    .dot { background: #10b981; box-shadow: 0 0 0 3px rgba(16,185,129,0.18); }
+.sync-status.warn  .dot { background: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,0.18); }
+.sync-status.error .dot { background: #ef4444; box-shadow: 0 0 0 3px rgba(239,68,68,0.18); }
+.sync-status.idle  .dot { background: #6b7280; box-shadow: 0 0 0 3px rgba(107,114,128,0.18); }
+.sync-status.syncing .dot {
+  background: #6366f1;
+  animation: sync-pulse 1.2s ease-in-out infinite;
+}
+@keyframes sync-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(99,102,241,0.15); }
+  50%      { box-shadow: 0 0 0 7px rgba(99,102,241,0.05); }
+}
+
+.label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 0.35rem;
+}
+
+#syncStatus {
+  padding: 0.75rem 1rem;
+  background: var(--bg-secondary, rgba(99, 102, 241, 0.03));
+  border-radius: 6px;
+  border-left: 3px solid var(--accent, #6366f1);
+}
+#syncStatus.ok    { border-left-color: #10b981; }
+#syncStatus.warn  { border-left-color: #f59e0b; }
+#syncStatus.error { border-left-color: #ef4444; }
