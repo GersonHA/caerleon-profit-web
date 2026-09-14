@@ -324,62 +324,89 @@
 
     <!-- ========== TAB: SETTINGS ========== -->
     <section id="tab-settings" class="tab-content">
+      <!-- ===== SYNC CARD (minimalist) ===== -->
       <div class="card">
-        <div class="card-header">☁️ Sincronización con GitHub Gist</div>
+        <div class="card-header">☁️ Sincronización</div>
         <div class="card-body">
-          <p>Guarda tus datos en la nube (GitHub Gist privado) para acceder desde <strong>cualquier dispositivo</strong>. Solo tú puedes verlos.</p>
+          <!-- Connected view: just status pill + auto-sync indicator -->
+          <div id="syncConnectedView" class="hidden">
+            <div class="sync-info">
+              <div class="sync-status-row">
+                <span class="sync-pulse-dot"></span>
+                <span><strong>Auto-sync activo</strong></span>
+              </div>
+              <p class="hint" id="syncConnectedInfo" style="margin: 0.5rem 0 0 0;">
+                Tus datos se guardan automáticamente en este dispositivo y en la nube.
+              </p>
+            </div>
+          </div>
 
-          <details class="gist-help">
-            <summary>📖 ¿Cómo configuro esto? (click para ver los pasos)</summary>
-            <ol class="hint" style="margin-top: 0.5rem; padding-left: 1.2rem; line-height: 1.7;">
-              <li>Ve a <a href="https://github.com/settings/tokens/new?scopes=gist&description=Caerleon%20Profit%20Calculator" target="_blank" rel="noopener">github.com/settings/tokens/new</a></li>
-              <li>Selecciona solo el scope <code>gist</code> (ya viene marcado)</li>
-              <li>Click <strong>Generate token</strong> y cópialo (empieza con <code>ghp_...</code>)</li>
-              <li>Pégalo abajo. La app creará un Gist privado automáticamente</li>
-            </ol>
-          </details>
-
-          <div id="syncConfigArea">
+          <!-- Not connected view: token input only -->
+          <div id="syncSetupView">
+            <p class="hint" style="margin-top: 0;">
+              Conecta una vez con GitHub para que tu data se sincronice automáticamente entre dispositivos.
+            </p>
+            <details class="gist-help" style="margin-top: 0.75rem;">
+              <summary>📖 ¿Cómo conecto? (click aquí)</summary>
+              <ol class="hint" style="margin-top: 0.5rem; padding-left: 1.2rem; line-height: 1.7;">
+                <li>Ve a <a href="https://github.com/settings/tokens/new?scopes=gist&description=Caerleon%20Profit%20Calculator" target="_blank" rel="noopener">github.com/settings/tokens/new</a></li>
+                <li>Marca solo el scope <code>gist</code> (ya viene marcado)</li>
+                <li>Click <strong>Generate token</strong> y cópialo (empieza con <code>ghp_...</code>)</li>
+                <li>Pégalo abajo. Solo lo haces una vez.</li>
+              </ol>
+            </details>
             <div class="form-grid" style="margin-top: 1rem;">
               <div>
                 <label for="ghToken" class="label">GitHub Token</label>
                 <input type="password" id="ghToken" class="input" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" autocomplete="off">
-                <small class="hint">Solo se guarda en tu navegador. Nunca se envía a otro servidor que no sea GitHub.</small>
               </div>
               <div>
                 <label for="ghGistId" class="label">Gist ID (opcional)</label>
-                <input type="text" id="ghGistId" class="input" placeholder="se crea automáticamente al guardar">
-                <small class="hint">Déjalo vacío para crear uno nuevo. Si ya tienes uno, pégalo aquí.</small>
+                <input type="text" id="ghGistId" class="input" placeholder="se crea automáticamente">
               </div>
             </div>
-
-            <div class="row gap-2 wrap" style="margin-top: 1rem;">
-              <button id="btnSyncSave" class="btn btn-primary">💾 Guardar y Conectar</button>
-              <button id="btnSyncTest" class="btn btn-secondary">🔌 Probar conexión</button>
-              <button id="btnSyncNow" class="btn btn-secondary hidden">⬆️ Sincronizar ahora</button>
-              <button id="btnSyncPull" class="btn btn-secondary hidden">⬇️ Traer de la nube</button>
-              <button id="btnSyncDisconnect" class="btn btn-danger hidden">🔌 Desconectar</button>
+            <div class="row" style="margin-top: 1rem;">
+              <button id="btnSyncSave" class="btn btn-primary">🔗 Conectar</button>
             </div>
-
-            <div id="syncStatus" class="hint" style="margin-top: 1rem;"></div>
           </div>
+
+          <!-- Hidden status indicator (used internally) -->
+          <div id="syncStatus" class="hidden"></div>
         </div>
       </div>
 
+      <!-- ===== BACKUP CARD (minimalist) ===== -->
       <div class="card">
-        <div class="card-header">💾 Datos y Respaldo Local</div>
+        <div class="card-header">💾 Respaldo Local</div>
         <div class="card-body">
-          <p>Tu data se guarda automáticamente en este navegador (localStorage) <strong>y</strong> en la nube (si conectaste GitHub).</p>
-          <div class="row gap-2 wrap">
-            <button id="btnExport" class="btn btn-primary">📤 Exportar JSON</button>
-            <button id="btnImport" class="btn btn-secondary">📥 Importar JSON</button>
-            <input type="file" id="fileImport" accept=".json" style="display:none">
-            <button id="btnClear" class="btn btn-danger">🗑️ Borrar todo</button>
+          <p class="hint" style="margin: 0;">
+            Tus datos se guardan automáticamente en este navegador.
+          </p>
+          <div id="storageInfo" class="hint" style="margin-top: 0.5rem;"></div>
+          <div id="backupRestoreArea" class="hidden" style="margin-top: 0.75rem;">
+            <button id="btnRestoreBackup" class="btn btn-secondary btn-sm">♻️ Restaurar respaldo automático</button>
           </div>
-          <div id="storageInfo" class="hint" style="margin-top: 1rem;"></div>
         </div>
       </div>
 
+      <!-- ===== ADVANCED (collapsed by default) ===== -->
+      <details class="advanced-section">
+        <summary>⚙️ Opciones avanzadas</summary>
+        <div class="card-body" style="padding-top: 1rem;">
+          <div class="row gap-2 wrap">
+            <button id="btnExport" class="btn btn-secondary btn-sm">📤 Exportar JSON</button>
+            <button id="btnImport" class="btn btn-secondary btn-sm">📥 Importar JSON</button>
+            <input type="file" id="fileImport" accept=".json" style="display:none">
+            <button id="btnSyncTest" class="btn btn-secondary btn-sm">🔌 Probar conexión</button>
+            <button id="btnSyncNow" class="btn btn-secondary btn-sm">⬆️ Forzar push</button>
+            <button id="btnSyncPull" class="btn btn-secondary btn-sm">⬇️ Forzar pull</button>
+            <button id="btnSyncDisconnect" class="btn btn-danger btn-sm">🔌 Desconectar nube</button>
+            <button id="btnClear" class="btn btn-danger btn-sm">🗑️ Borrar todo local</button>
+          </div>
+        </div>
+      </details>
+
+      <!-- ===== ABOUT ===== -->
       <div class="card">
         <div class="card-header">ℹ️ Acerca de</div>
         <div class="card-body">

@@ -42,6 +42,7 @@ const DEFAULT_PRECIOS = {
 };
 
 const STORAGE_KEY = 'caerleon_profit_data_v1';
+const BACKUP_KEY = 'caerleon_profit_backup_v1';
 const SYNC_CONFIG_KEY = 'caerleon_sync_config_v1';
 const SYNC_FILENAME = 'caerleon-profit-data.json';
 
@@ -93,12 +94,22 @@ function loadState() {
 
 function saveState() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    const payload = {
       precios: state.precios,
       registro: state.registro,
       theme: state.theme,
       premium: state.premium,
-    }));
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    // Auto-backup: keep last known good state with data
+    if (state.registro.length > 0) {
+      try {
+        localStorage.setItem(BACKUP_KEY, JSON.stringify({
+          ...payload,
+          _backupAt: new Date().toISOString(),
+        }));
+      } catch (e) { /* backup is best-effort */ }
+    }
     // Schedule cloud sync if configured
     if (syncConfig && syncConfig.token && syncConfig.gistId) {
       scheduleSyncPush();
@@ -106,6 +117,30 @@ function saveState() {
   } catch (e) {
     console.error('Error guardando state:', e);
     showToast('Error guardando datos', 'error');
+  }
+}
+
+// Restore from local backup (if main localStorage got wiped or sync wiped data)
+function restoreFromBackup() {
+  try {
+    const raw = localStorage.getItem(BACKUP_KEY);
+    if (!raw) return false;
+    const data = JSON.parse(raw);
+    if (!data.precios || !data.registro) return false;
+    if (data.registro.length === 0) return false;
+    state.precios = data.precios;
+    state.registro = data.registro;
+    if (data.premium !== undefined) state.premium = data.premium;
+    saveState();
+    initPrecios();
+    updateCalculadora();
+    updateRegistro();
+    updateDashboard();
+    updateStorageInfo();
+    return true;
+  } catch (e) {
+    console.error('Backup restore failed:', e);
+    return false;
   }
 }
 
@@ -482,43 +517,40 @@ function updateSyncUI() {
   const statusEl = document.getElementById('syncStatus');
   const tokenInput = document.getElementById('ghToken');
   const gistInput = document.getElementById('ghGistId');
-  const btnSyncNow = document.getElementById('btnSyncNow');
-  const btnSyncPull = document.getElementById('btnSyncPull');
-  const btnDisconnect = document.getElementById('btnSyncDisconnect');
+  const connectedView = document.getElementById('syncConnectedView');
+  const setupView = document.getElementById('syncSetupView');
+  const connectedInfo = document.getElementById('syncConnectedInfo');
 
   if (!statusEl) return;
 
   const connected = syncConfig && syncConfig.token && syncConfig.gistId;
 
-  // Fill inputs if not focused
-  if (tokenInput && document.activeElement !== tokenInput) {
-    tokenInput.value = syncConfig?.token || '';
-  }
-  if (gistInput && document.activeElement !== gistInput) {
-    gistInput.value = syncConfig?.gistId || '';
+  // Toggle between connected (minimal) and setup views
+  if (connectedView) connectedView.classList.toggle('hidden', !connected);
+  if (setupView) setupView.classList.toggle('hidden', connected);
+
+  // Fill inputs if not focused (only when setup view is shown)
+  if (!connected) {
+    if (tokenInput && document.activeElement !== tokenInput) {
+      tokenInput.value = syncConfig?.token || '';
+    }
+    if (gistInput && document.activeElement !== gistInput) {
+      gistInput.value = syncConfig?.gistId || '';
+    }
   }
 
-  // Toggle buttons
-  if (btnSyncNow)   btnSyncNow.classList.toggle('hidden', !connected);
-  if (btnSyncPull)  btnSyncPull.classList.toggle('hidden', !connected);
-  if (btnDisconnect) btnDisconnect.classList.toggle('hidden', !connected);
-
-  // Status pill
-  const dotClass = syncStatus.state;
-  const lastSyncText = syncStatus.lastSync
-    ? `Última sync: ${syncStatus.lastSync.toLocaleString()}`
-    : '';
-  const userText = syncConfig?.user ? ` · @${syncConfig.user}` : '';
-  statusEl.className = 'hint ' + dotClass;
-  statusEl.innerHTML = `
-    <div class="row gap-2 wrap" style="align-items:center;">
-      <span class="sync-status ${dotClass}">
-        <span class="dot"></span>
-        ${syncStatus.msg}
-      </span>
-      ${connected ? `<span class="hint">${lastSyncText}${userText}</span>` : ''}
-    </div>
-  `;
+  // Connected view info
+  if (connected && connectedInfo) {
+    const lastSyncText = syncStatus.lastSync
+      ? `Última actualización: ${syncStatus.lastSync.toLocaleTimeString()}`
+      : 'Sincronizando…';
+    const userText = syncConfig?.user ? ` · @${syncConfig.user}` : '';
+    const opCount = state.registro.length;
+    connectedInfo.innerHTML = `
+      ${opCount} operación${opCount !== 1 ? 'es' : ''} sincronizada${opCount !== 1 ? 's' : ''} en la nube${userText}
+      <br><small class="hint">${lastSyncText}</small>
+    `;
+  }
 }
 
 async function handleSyncSave() {
@@ -590,6 +622,28 @@ function handleSyncDisconnect() {
   syncStatus.remoteUpdated = null;
   setSyncStatus('idle', 'Desconectado. Datos solo en este dispositivo.');
   showToast('🔌 Sincronización desconectada', 'info');
+}
+
+function handleRestoreBackup() {
+  try {
+    const raw = localStorage.getItem(BACKUP_KEY);
+    if (!raw) {
+      showToast('❌ No hay backup disponible', 'error');
+      return;
+    }
+    const data = JSON.parse(raw);
+    if (!data.registro || data.registro.length === 0) {
+      showToast('❌ Backup está vacío', 'error');
+      return;
+    }
+    const age = data._backupAt ? new Date(data._backupAt).toLocaleString() : '?';
+    if (!confirm(`¿Restaurar ${data.registro.length} operaciones del backup local?\n(Backup de ${age})\n\nEsto REEMPLAZARÁ tus datos actuales.`)) return;
+    if (restoreFromBackup()) {
+      showToast(`♻️ ${data.registro.length} ops restauradas`, 'success');
+    }
+  } catch (e) {
+    showToast('❌ Error: ' + e.message, 'error');
+  }
 }
 
 // Period date range computation
@@ -1624,6 +1678,8 @@ function initSettings() {
   document.getElementById('btnSyncNow').addEventListener('click', pushToGist);
   document.getElementById('btnSyncPull').addEventListener('click', pullFromGist);
   document.getElementById('btnSyncDisconnect').addEventListener('click', handleSyncDisconnect);
+  const btnRestore = document.getElementById('btnRestoreBackup');
+  if (btnRestore) btnRestore.addEventListener('click', handleRestoreBackup);
 
   // Dashboard period/goal controls
   populateMonthSelect();
@@ -1696,8 +1752,26 @@ function populateMonthSelect() {
 
 function updateStorageInfo() {
   const size = (JSON.stringify(state).length / 1024).toFixed(1);
+  let backupInfo = '';
+  let hasBackup = false;
+  try {
+    const raw = localStorage.getItem(BACKUP_KEY);
+    if (raw) {
+      const b = JSON.parse(raw);
+      const age = b._backupAt ? new Date(b._backupAt).toLocaleString() : '?';
+      hasBackup = b.registro && b.registro.length > 0;
+      backupInfo = `<br><small class="hint">♻️ Respaldo: ${b.registro?.length || 0} ops guardado${hasBackup ? ` (${age})` : ''}</small>`;
+    }
+  } catch (e) {}
   document.getElementById('storageInfo').innerHTML =
-    `<strong>Datos guardados:</strong> ${state.registro.length} operaciones, ${size} KB usados del localStorage.`;
+    `<strong>Datos guardados:</strong> ${state.registro.length} operaciones, ${size} KB${backupInfo}`;
+
+  // Show restore button ONLY if local is empty and backup has data
+  const restoreArea = document.getElementById('backupRestoreArea');
+  if (restoreArea) {
+    const showRestore = state.registro.length === 0 && hasBackup;
+    restoreArea.classList.toggle('hidden', !showRestore);
+  }
 }
 
 function exportarJSON() {
@@ -1828,6 +1902,25 @@ document.addEventListener('DOMContentLoaded', async () => {
   initRegistro();
   initDashboard();
   initSettings();
+
+  // SAFETY CHECK: If local is empty BUT we have a backup, offer to restore
+  if (state.registro.length === 0) {
+    try {
+      const raw = localStorage.getItem(BACKUP_KEY);
+      if (raw) {
+        const backup = JSON.parse(raw);
+        if (backup.registro && backup.registro.length > 0) {
+          const age = backup._backupAt ? new Date(backup._backupAt).toLocaleString() : '?';
+          if (confirm(`⚠️ Detecté que tu local está vacío pero hay un backup con ${backup.registro.length} operaciones (de ${age}).\n\n¿Restaurar desde backup?\n(Cancela si quieres descargar de la nube)`)) {
+            if (restoreFromBackup()) {
+              showToast(`♻️ ${backup.registro.length} operaciones restauradas del backup`, 'success');
+              console.log('[Safety] Restored from local backup');
+            }
+          }
+        }
+      }
+    } catch (e) { /* best effort */ }
+  }
 
   // Auto-pull from cloud on init if configured AND local is empty
   if (syncConfig && syncConfig.token && syncConfig.gistId) {
