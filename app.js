@@ -1734,8 +1734,15 @@ function updateRegistro() {
   if (filterTipo) items = items.filter(r => r.tipo === filterTipo);
   if (filterEstado) items = items.filter(r => getOpStatus(r) === filterEstado);
 
-  // Newest first by latest activity (fecha + hora of latest venta, or op fecha)
-  items.sort((a, b) => getOpActivityTime(b).localeCompare(getOpActivityTime(a)));
+  // Sort: status priority (crafteado first) THEN newest activity first
+  const statusPriority = { crafteado: 0, pendiente: 1, fallido: 2, vendido: 3 };
+  items.sort((a, b) => {
+    const sa = statusPriority[getOpStatus(a)] ?? 99;
+    const sb = statusPriority[getOpStatus(b)] ?? 99;
+    if (sa !== sb) return sa - sb;
+    // Within same status: newest activity first
+    return getOpActivityTime(b).localeCompare(getOpActivityTime(a));
+  });
 
   const tbody = document.getElementById('registroBody');
   const empty = document.getElementById('regEmpty');
