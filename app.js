@@ -328,6 +328,18 @@ function gistApi(path, method, body, token) {
     method,
     headers,
     body: body ? JSON.stringify(body) : undefined,
+  }).then(async res => {
+    if (res.status === 403 || res.status === 429) {
+      const remaining = res.headers.get('x-ratelimit-remaining');
+      const reset = res.headers.get('x-ratelimit-reset');
+      const resetDate = reset ? new Date(parseInt(reset) * 1000).toLocaleTimeString() : '?';
+      const err = new Error(`Rate limit alcanzado. Reset a las ${resetDate}`);
+      err.isRateLimit = true;
+      err.remaining = remaining;
+      err.reset = reset;
+      throw err;
+    }
+    return res;
   });
 }
 
@@ -500,6 +512,11 @@ async function pushToGist() {
       }
     } catch (e) {
       console.error(`[Push] Attempt ${attempt} failed:`, e.message);
+      if (e.isRateLimit) {
+        setSyncStatus('error', `⏳ Rate limit · reset ${e.reset ? new Date(parseInt(e.reset) * 1000).toLocaleTimeString() : '?'}`);
+        showToast(`⏳ Rate limit de GitHub · espera hasta el reset`, 'warn');
+        return false;
+      }
       if (attempt === 2) {
         setSyncStatus('error', `❌ ${e.message}`);
         showToast(`Error push: ${e.message}`, 'error');
@@ -590,7 +607,8 @@ async function pullFromGist() {
 
 function scheduleSyncPush() {
   if (syncTimer) clearTimeout(syncTimer);
-  setSyncStatus('warn', '⏱ Sync programado en 3s…');
+  setSyncStatus('warn', '⏱ Sync programado en 8s…');
+  // Longer debounce to reduce API calls (was 3s, now 8s)
   syncTimer = setTimeout(async () => {
     syncTimer = null;
     // SAFETY: if local has 0 ops, do a quick pull-check before pushing
@@ -776,23 +794,35 @@ async function applyRemoteData(remote, silent) {
   console.log('[AutoSync] Applied remote data:', remote.registro.length, 'ops');
 }
 
+let lastFocusCheck = 0;
+
 function startAutoSync() {
   if (syncInterval) return; // Already running
-  // Poll every 30s when tab is visible
+  // Poll every 5 minutes (was 30s — caused rate limit issues)
   syncInterval = setInterval(() => {
     if (!document.hidden && document.visibilityState === 'visible') {
       checkRemoteChanges({ silent: false });
     }
-  }, 30000);
-  // Also check immediately when tab becomes visible
+  }, 300000); // 5 min
+  // Also check immediately when tab becomes visible (but throttle: max 1 per minute)
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
+      const now = Date.now();
+      if (now - lastFocusCheck > 60000) { // throttle to 1/min
+        lastFocusCheck = now;
+        checkRemoteChanges({ silent: false });
+      }
+    }
+  });
+  // Window focus: throttle
+  window.addEventListener('focus', () => {
+    const now = Date.now();
+    if (now - lastFocusCheck > 60000) {
+      lastFocusCheck = now;
       checkRemoteChanges({ silent: false });
     }
   });
-  // And when window gets focus
-  window.addEventListener('focus', () => checkRemoteChanges({ silent: false }));
-  console.log('[AutoSync] Started · polling every 30s when visible');
+  console.log('[AutoSync] Started · polling every 5min when visible (throttled)');
 }
 
 function stopAutoSync() {
