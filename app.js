@@ -105,10 +105,12 @@ function loadState() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
+      // Migration: ensure all ops have ventas array and add date to venta events
+      const registro = (parsed.registro || []).map(op => migrateOpVenta(op));
       return {
         precios: parsed.precios || structuredClone(DEFAULT_PRECIOS),
         sellos: parsed.sellos || structuredClone(DEFAULT_SELLOS),
-        registro: parsed.registro || [],
+        registro,
         theme: parsed.theme || 'light',
         premium: parsed.premium !== undefined ? parsed.premium : true,
       };
@@ -124,6 +126,94 @@ function loadState() {
     premium: true,
   };
 }
+
+// Migration helper: ensure op has ventas array and proper format
+function migrateOpVenta(op) {
+  if (!op.ventas) {
+    op.ventas = [];
+    // Auto-create one "vendido" venta from existing pVenta if applicable
+    if (op.pVenta && op.pVenta > 0) {
+      op.ventas.push({
+        id: 'v_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        fecha: op.fecha || localDateStr(),
+        hora: '12:00',
+        precio: op.pVenta,
+        comprador: 'bm',
+        estado: 'vendido',
+        notas: 'Migrado automáticamente',
+      });
+    }
+  }
+  return op;
+}
+
+// Helpers for sale events (Option B)
+function getOpStatus(op) {
+  if (!op.ventas || op.ventas.length === 0) return 'crafteado';
+  const hasSold = op.ventas.some(v => v.estado === 'vendido');
+  if (hasSold) return 'vendido';
+  const hasPending = op.ventas.some(v => v.estado === 'pendiente');
+  if (hasPending) return 'pendiente';
+  return 'fallido'; // all failed or none sold/pending
+}
+
+function getOpActualProfit(op) {
+  // Profit = sum of sold venta prices - cost - tax
+  const soldVentas = (op.ventas || []).filter(v => v.estado === 'vendido');
+  if (soldVentas.length === 0) return 0;
+  const totalSold = soldVentas.reduce((s, v) => s + (v.precio * (op.qty || 1)), 0);
+  const tax = state.premium ? 0.04 : 0.08;
+  const netRevenue = totalSold * (1 - tax);
+  return netRevenue - (op.inversion || 0);
+}
+
+function addVenta(opId, ventaData) {
+  const op = state.registro.find(r => r.id === opId);
+  if (!op) return false;
+  if (!op.ventas) op.ventas = [];
+  op.ventas.push({
+    id: 'v_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+    fecha: ventaData.fecha || localDateStr(),
+    hora: ventaData.hora || new Date().toTimeString().slice(0, 5),
+    precio: ventaData.precio || 0,
+    comprador: ventaData.comprador || 'bm',
+    estado: ventaData.estado || 'pendiente',
+    notas: ventaData.notas || '',
+  });
+  saveState();
+  return true;
+}
+
+function updateVenta(opId, ventaId, updates) {
+  const op = state.registro.find(r => r.id === opId);
+  if (!op || !op.ventas) return false;
+  const venta = op.ventas.find(v => v.id === ventaId);
+  if (!venta) return false;
+  Object.assign(venta, updates);
+  saveState();
+  return true;
+}
+
+function deleteVenta(opId, ventaId) {
+  const op = state.registro.find(r => r.id === opId);
+  if (!op || !op.ventas) return false;
+  op.ventas = op.ventas.filter(v => v.id !== ventaId);
+  saveState();
+  return true;
+}
+
+const COMPRADOR_LABELS = {
+  bm: '🏛️ Mercado Negro',
+  player: '👥 Mercado Jugadores',
+  guild: '🏰 Gremio',
+  direct: '🤝 Directo',
+};
+
+const ESTADO_VENTA_LABELS = {
+  pendiente: '⏳ Pendiente',
+  vendido: '✅ Vendido',
+  fallido: '❌ Fallido',
+};
 
 function saveState() {
   try {
@@ -166,7 +256,7 @@ function restoreFromBackup() {
     if (data.registro.length === 0) return false;
     state.precios = data.precios;
     if (data.sellos) state.sellos = data.sellos;
-    state.registro = data.registro;
+    state.registro = data.registro.map(op => migrateOpVenta(op));
     if (data.premium !== undefined) state.premium = data.premium;
     saveState();
     initPrecios();
@@ -315,7 +405,7 @@ async function pushToGist() {
             console.warn(`[Push Safety] Local ${localCount} < Remote ${remoteCount} — pulling instead`);
             setSyncStatus('warn', `⚠️ Nube tiene ${remoteCount} ops (más que local) · mergeando…`);
             const merge = mergeRegistros(state.registro, remote.registro);
-            state.registro = merge.merged;
+            state.registro = merge.merged.map(op => migrateOpVenta(op));
             state.precios = mergePrecios(state.precios, remote.precios);
             if (remote.sellos) state.sellos = { ...state.sellos, ...remote.sellos };
             if (remote._updated) state._updated = remote._updated;
@@ -456,7 +546,7 @@ async function pullFromGist() {
 
     // SMART MERGE for manual pull too (in case local has unique items)
     const merge = mergeRegistros(state.registro, remote.registro);
-    state.registro = merge.merged;
+    state.registro = merge.merged.map(op => migrateOpVenta(op));
     state.precios = mergePrecios(state.precios, remote.precios);
     if (remote.sellos) state.sellos = { ...state.sellos, ...remote.sellos };
     if (remote.premium !== undefined) state.premium = remote.premium;
@@ -591,7 +681,7 @@ async function checkRemoteChanges({ silent = true } = {}) {
       } else {
         const merge = mergeRegistros(state.registro, remote.registro);
         if (merge.addedFromRemote > 0) {
-          state.registro = merge.merged;
+          state.registro = merge.merged.map(op => migrateOpVenta(op));
           state.precios = mergePrecios(state.precios, remote.precios);
           if (remote.sellos) state.sellos = { ...state.sellos, ...remote.sellos };
           state._updated = remoteUpdated;
@@ -624,7 +714,7 @@ async function checkRemoteChanges({ silent = true } = {}) {
         const merge = mergeRegistros(state.registro, remote.registro);
         console.log('[AutoSync] Smart merge:', merge);
         if (merge.addedFromRemote > 0) {
-          state.registro = merge.merged;
+          state.registro = merge.merged.map(op => migrateOpVenta(op));
           state.precios = mergePrecios(state.precios, remote.precios);
           if (remote.sellos) state.sellos = { ...state.sellos, ...remote.sellos };
           state._updated = remoteUpdated;
@@ -661,7 +751,7 @@ async function checkRemoteChanges({ silent = true } = {}) {
 async function applyRemoteData(remote, silent) {
   state.precios = remote.precios;
   if (remote.sellos) state.sellos = { ...state.sellos, ...remote.sellos };
-  state.registro = remote.registro;
+  state.registro = (remote.registro || []).map(op => migrateOpVenta(op));
   if (remote.premium !== undefined) state.premium = remote.premium;
   saveState();
   initPrecios();
@@ -1623,7 +1713,7 @@ function updateRegistro() {
     `t${r.tier}`.includes(search) ||
     (r.notas || '').toLowerCase().includes(search));
   if (filterTipo) items = items.filter(r => r.tipo === filterTipo);
-  if (filterEstado) items = items.filter(r => r.estado === filterEstado);
+  if (filterEstado) items = items.filter(r => getOpStatus(r) === filterEstado);
 
   // Newest first
   items.sort((a,b) => (b.fecha || '').localeCompare(a.fecha || ''));
@@ -1642,25 +1732,174 @@ function updateRegistro() {
 
   tbody.innerHTML = items.map((r, idx) => {
     const realIdx = state.registro.indexOf(r);
+    const opStatus = getOpStatus(r);
+    const ventas = r.ventas || [];
+    const actualProfit = getOpActualProfit(r);
+    const statusBadge = {
+      crafteado: '⚪ Crafteado',
+      vendido: '✅ Vendido',
+      pendiente: '⏳ Pendiente',
+      fallido: '❌ Fallido',
+    }[opStatus];
+
     return `
-      <tr>
+      <tr class="op-row" data-op-id="${r.id}" onclick="toggleOpDetail('${r.id}')">
+        <td><button class="expand-btn">▶</button></td>
         <td>${r.fecha || '—'}</td>
         <td><img class="mat-icon-sm" src="${imgUrl(getItemId(r.tipo, r.tier))}" alt=""> ${r.tipo}</td>
         <td>T${r.tier}</td>
         <td>.${r.enchIni}→.${r.enchFin}</td>
         <td>${r.qty}</td>
-        <td>${fmtSilver(r.pCompra)}</td>
-        <td>${fmtSilver(r.pVenta)}</td>
         <td>${fmtSilver(r.inversion)}</td>
-        <td>${fmtSilver(r.revNeto)}</td>
-        <td style="color: ${r.profit > 0 ? 'var(--success)' : r.profit < 0 ? 'var(--danger)' : 'inherit'}; font-weight:600;">${fmtSilver(r.profit)}</td>
-        <td>${fmtPct(r.roi)}</td>
-        <td class="estado-cell">${r.estado}</td>
-        <td>${r.notas || ''}</td>
-        <td><button class="delete-btn" onclick="deleteRegistro(${realIdx})">🗑️</button></td>
+        <td>${fmtSilver(r.pVenta)}</td>
+        <td style="color: ${actualProfit > 0 ? 'var(--success)' : actualProfit < 0 ? 'var(--danger)' : 'inherit'}; font-weight:600;">${fmtSilver(actualProfit)}</td>
+        <td><span class="status-badge status-${opStatus}">${statusBadge}</span></td>
+        <td><button class="delete-btn" onclick="event.stopPropagation();deleteRegistro(${realIdx})">🗑️</button></td>
+      </tr>
+      <tr class="op-detail-row hidden" id="detail-${r.id}">
+        <td colspan="11">
+          <div class="op-detail-content">
+            <div class="ventas-header">
+              <strong>📜 Intentos de venta (${ventas.length})</strong>
+              <button class="btn btn-sm btn-primary" onclick="showAddVentaForm('${r.id}')">+ Agregar intento</button>
+            </div>
+            <div id="ventas-list-${r.id}">
+              ${ventas.length === 0 ? '<p class="hint">Sin intentos de venta aún. Click "+ Agregar intento" cuando intentes vender.</p>' : ventas.map(v => renderVentaRow(r.id, v)).join('')}
+            </div>
+          </div>
+        </td>
       </tr>
     `;
   }).join('');
+}
+
+function renderVentaRow(opId, v) {
+  return `
+    <div class="venta-item venta-${v.estado}">
+      <div class="venta-info">
+        <span class="venta-fecha">${v.fecha} ${v.hora || ''}</span>
+        <span class="venta-precio">${fmtSilver(v.precio)}</span>
+        <span class="venta-comprador">${COMPRADOR_LABELS[v.comprador] || v.comprador}</span>
+        <span class="venta-estado">${ESTADO_VENTA_LABELS[v.estado] || v.estado}</span>
+        ${v.notas ? `<span class="venta-notas">${v.notas}</span>` : ''}
+      </div>
+      <div class="venta-actions">
+        <button class="btn-tiny" onclick="showEditVentaForm('${opId}','${v.id}')">✏️</button>
+        <button class="btn-tiny danger" onclick="deleteVentaConfirm('${opId}','${v.id}')">🗑️</button>
+      </div>
+    </div>
+  `;
+}
+
+function toggleOpDetail(opId) {
+  const detailRow = document.getElementById(`detail-${opId}`);
+  if (!detailRow) return;
+  detailRow.classList.toggle('hidden');
+  // Update expand button
+  const opRow = document.querySelector(`tr.op-row[data-op-id="${opId}"] .expand-btn`);
+  if (opRow) opRow.textContent = detailRow.classList.contains('hidden') ? '▶' : '▼';
+}
+
+function showAddVentaForm(opId, existingVentaId = null) {
+  const op = state.registro.find(r => r.id === opId);
+  if (!op) return;
+  const existing = existingVentaId ? (op.ventas || []).find(v => v.id === existingVentaId) : null;
+  const isEdit = !!existing;
+
+  // Build modal HTML
+  const modal = document.createElement('div');
+  modal.className = 'modal-backdrop';
+  modal.innerHTML = `
+    <div class="modal-content" onclick="event.stopPropagation()">
+      <h3>${isEdit ? '✏️ Editar intento de venta' : '➕ Nuevo intento de venta'}</h3>
+      <p class="hint">Item: <strong>${op.tipo} T${op.tier}.${op.enchFin}</strong> · Costo: ${fmtSilver(op.inversion)}</p>
+      <form id="ventaForm">
+        <div class="form-grid">
+          <div>
+            <label class="label">Fecha</label>
+            <input type="date" id="vFecha" class="input" value="${existing?.fecha || localDateStr()}">
+          </div>
+          <div>
+            <label class="label">Hora</label>
+            <input type="time" id="vHora" class="input" value="${existing?.hora || new Date().toTimeString().slice(0,5)}">
+          </div>
+          <div>
+            <label class="label">Precio</label>
+            <input type="number" id="vPrecio" class="input" value="${existing?.precio || op.pVenta || 0}" min="0" step="1">
+          </div>
+          <div>
+            <label class="label">Comprador</label>
+            <select id="vComprador" class="input">
+              <option value="bm" ${existing?.comprador === 'bm' ? 'selected' : ''}>🏛️ Mercado Negro</option>
+              <option value="player" ${existing?.comprador === 'player' ? 'selected' : ''}>👥 Mercado Jugadores</option>
+              <option value="guild" ${existing?.comprador === 'guild' ? 'selected' : ''}>🏰 Gremio</option>
+              <option value="direct" ${existing?.comprador === 'direct' ? 'selected' : ''}>🤝 Directo</option>
+            </select>
+          </div>
+          <div>
+            <label class="label">Estado</label>
+            <select id="vEstado" class="input">
+              <option value="vendido" ${existing?.estado === 'vendido' ? 'selected' : ''}>✅ Vendido</option>
+              <option value="pendiente" ${existing?.estado === 'pendiente' ? 'selected' : ''}>⏳ Pendiente (listado)</option>
+              <option value="fallido" ${existing?.estado === 'fallido' ? 'selected' : ''}>❌ Fallido (perdiste slot)</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-top: 1rem;">
+          <label class="label">Notas</label>
+          <textarea id="vNotas" class="input" rows="2" placeholder="Ej: Slot tomado por otro jugador, listé en player market...">${existing?.notas || ''}</textarea>
+        </div>
+        <div class="row gap-2" style="margin-top: 1rem; justify-content: flex-end;">
+          <button type="button" class="btn btn-secondary" onclick="closeVentaModal()">Cancelar</button>
+          <button type="submit" class="btn btn-primary">${isEdit ? 'Guardar cambios' : 'Agregar intento'}</button>
+        </div>
+      </form>
+    </div>
+  `;
+  modal.addEventListener('click', closeVentaModal);
+  document.body.appendChild(modal);
+
+  document.getElementById('ventaForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const data = {
+      fecha: document.getElementById('vFecha').value,
+      hora: document.getElementById('vHora').value,
+      precio: Math.max(0, parseFloat(document.getElementById('vPrecio').value) || 0),
+      comprador: document.getElementById('vComprador').value,
+      estado: document.getElementById('vEstado').value,
+      notas: document.getElementById('vNotas').value.trim(),
+    };
+    if (isEdit) {
+      updateVenta(opId, existingVentaId, data);
+      showToast('✅ Intento actualizado', 'success');
+    } else {
+      addVenta(opId, data);
+      showToast(`✅ Intento agregado (${data.estado})`, 'success');
+    }
+    closeVentaModal();
+    updateRegistro();
+    updateDashboard();
+    // Auto-expand the row to show the new venta
+    const detail = document.getElementById(`detail-${opId}`);
+    if (detail && detail.classList.contains('hidden')) toggleOpDetail(opId);
+  });
+}
+
+function showEditVentaForm(opId, ventaId) {
+  showAddVentaForm(opId, ventaId);
+}
+
+function deleteVentaConfirm(opId, ventaId) {
+  if (!confirm('¿Borrar este intento de venta?')) return;
+  deleteVenta(opId, ventaId);
+  updateRegistro();
+  updateDashboard();
+  showToast('Intento borrado', 'info');
+}
+
+function closeVentaModal() {
+  const modal = document.querySelector('.modal-backdrop');
+  if (modal) modal.remove();
 }
 
 function getItemId(tipo, tier) {
@@ -1713,6 +1952,24 @@ function updateDashboard() {
   const dashboardActive = document.getElementById('tab-dashboard').classList.contains('active');
   const reg = getFilteredRegistro();
   const totalOps = reg.length;
+
+  // NEW: classify ops by status derived from ventas
+  const opsSold = reg.filter(r => getOpStatus(r) === 'vendido');
+  const opsPending = reg.filter(r => getOpStatus(r) === 'pendiente');
+  const opsFailed = reg.filter(r => getOpStatus(r) === 'fallido');
+  const opsCrafted = reg.filter(r => getOpStatus(r) === 'crafteado');
+
+  // NEW: calculate profits using ventas (Option B)
+  const realizedProfit = opsSold.reduce((s, r) => s + getOpActualProfit(r), 0);
+  const inventoryValue = opsPending.reduce((s, r) => {
+    // Expected value = cost (what you paid to make) + expected profit
+    return s + (r.inversion || 0);
+  }, 0);
+  const inventoryCount = opsPending.length;
+  const losses = opsFailed.reduce((s, r) => s + (r.inversion || 0), 0);
+  const craftedCost = opsCrafted.reduce((s, r) => s + (r.inversion || 0), 0);
+
+  // Legacy metrics (kept for backward compat)
   const profits = reg.map(r => r.profit);
   const rois = reg.map(r => r.roi);
   const pus = reg.map(r => r.profitUnit);
@@ -1729,10 +1986,10 @@ function updateDashboard() {
   const pctExito = totalOps > 0 ? positivos / totalOps : 0;
 
   const kpis = [
-    { id: 'kpi-profit-total', label: 'Profit total', raw: totalProfit, fmt: 'money', cls: totalProfit > 0 ? 'success' : 'danger' },
-    { id: 'kpi-profit-avg',   label: 'Profit promedio', raw: avgProfit, fmt: 'money', cls: avgProfit > 0 ? 'success' : 'danger' },
-    { id: 'kpi-ops',          label: 'Operaciones', raw: totalOps, fmt: 'int', cls: 'info' },
-    { id: 'kpi-exito',        label: '% Éxito', raw: pctExito, fmt: 'pct', cls: pctExito >= 0.5 ? 'success' : 'danger' },
+    { id: 'kpi-realized',    label: '💰 Profit Realizado', raw: realizedProfit, fmt: 'money', cls: realizedProfit > 0 ? 'success' : 'neutral' },
+    { id: 'kpi-inventory',   label: '📦 En Inventario', raw: inventoryValue, fmt: 'money', sub: `${inventoryCount} items`, cls: inventoryCount > 0 ? 'info' : 'neutral' },
+    { id: 'kpi-failed',      label: '❌ Pérdidas', raw: losses, fmt: 'money', sub: `${opsFailed.length} fallidos`, cls: losses > 0 ? 'danger' : 'neutral' },
+    { id: 'kpi-sold-count',   label: '✅ Vendidos', raw: opsSold.length, fmt: 'int', sub: `de ${totalOps}`, cls: 'success' },
   ];
 
   const grid = document.getElementById('kpiGrid');
@@ -2322,7 +2579,7 @@ function importarJSON(e) {
       if (!confirm(`¿Importar ${data.registro.length} operaciones? Esto REEMPLAZARÁ tus datos actuales.`)) return;
       state.precios = data.precios;
       if (data.sellos) state.sellos = data.sellos;
-      state.registro = data.registro;
+      state.registro = data.registro.map(op => migrateOpVenta(op));
       saveState();
       initPrecios();
       updateCalculadora();
