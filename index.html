@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Caerleon Profit Calculator</title>
+<title>Calculadora de Profit de Caerleon</title>
 <link rel="stylesheet" href="styles.css">
 <script src="chart.umd.min.js"></script>
 </head>
@@ -17,6 +17,7 @@
     </div>
     <nav class="tabs">
       <button class="tab active" data-tab="calc">Calculadora</button>
+      <button class="tab" data-tab="royal">Sellos Reales</button>
       <button class="tab" data-tab="precios">Precios</button>
       <button class="tab" data-tab="registro">Registro <span id="registroCount" class="badge">0</span></button>
       <button class="tab" data-tab="dashboard">Dashboard</button>
@@ -50,7 +51,7 @@
             <select id="inTipo"></select>
           </div>
           <div class="field">
-            <label>Tier</label>
+            <label>Nivel</label>
             <select id="inTier">
               <option>4</option><option>5</option><option>6</option><option>7</option><option>8</option>
             </select>
@@ -161,6 +162,143 @@
       </div>
     </section>
 
+    <!-- ========== TAB: SELLOS REALES ========== -->
+    <section id="tab-royal" class="tab-content">
+      <div class="card">
+        <div class="card-header">⚙️ Configuración</div>
+        <div class="card-body row gap-3 wrap">
+          <label class="switch-row">
+            <span>Premium activo</span>
+            <input type="checkbox" id="royalPremium" class="switch-input">
+            <span class="switch-slider"></span>
+          </label>
+          <span id="royalTaxHint" class="hint">Tax: 4% con Premium, 8% sin Premium.</span>
+          <span class="debug-tax" id="royalDebugTax" style="margin-left:auto;font-size:0.75rem;color:var(--text-secondary);"></span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">👑 Crafting con Sellos Reales</div>
+        <div class="card-body">
+          <p class="hint" style="margin-top:0;">Combinas un item base + sellos reales para crear un item "Real" que vendes en el Mercado Negro.</p>
+
+          <div class="form-grid">
+            <div>
+              <label class="label">Slot del item</label>
+              <div class="cselect" data-cs="royalSlot">
+                <button type="button" class="cselect-trigger" aria-haspopup="listbox" aria-expanded="false">
+                  <span class="cselect-label">Casco Real</span>
+                  <svg class="cselect-chev" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                </button>
+                <ul class="cselect-menu" role="listbox">
+                  <li role="option" data-value="helmet" class="cselect-option active">Casco Real</li>
+                  <li role="option" data-value="chest" class="cselect-option">Peto Real</li>
+                  <li role="option" data-value="boots" class="cselect-option">Botas Reales</li>
+                </ul>
+              </div>
+              <small class="hint">Las capas usan Corazón + Blasón, no Sellos Reales.</small>
+            </div>
+            <div>
+              <label class="label">Nivel</label>
+              <div class="cselect" data-cs="royalTier">
+                <button type="button" class="cselect-trigger" aria-haspopup="listbox" aria-expanded="false">
+                  <span class="cselect-label">T4 (Sello Real de Aprendiz)</span>
+                  <svg class="cselect-chev" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                </button>
+                <ul class="cselect-menu" role="listbox">
+                  <li role="option" data-value="4" class="cselect-option active">T4 (Sello Real de Aprendiz)</li>
+                  <li role="option" data-value="5" class="cselect-option">T5 (Sello Real de Experto)</li>
+                  <li role="option" data-value="6" class="cselect-option">T6 (Sello Real de Maestro)</li>
+                </ul>
+              </div>
+            </div>
+            <div id="royalMaterialWrap">
+              <label class="label">Material base</label>
+              <div class="cselect" data-cs="royalMaterial">
+                <button type="button" class="cselect-trigger" aria-haspopup="listbox" aria-expanded="false">
+                  <span class="cselect-label">Tela</span>
+                  <svg class="cselect-chev" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                </button>
+                <ul class="cselect-menu" role="listbox">
+                  <li role="option" data-value="cloth" class="cselect-option active">Tela</li>
+                  <li role="option" data-value="leather" class="cselect-option">Cuero</li>
+                  <li role="option" data-value="plate" class="cselect-option">Placa</li>
+                </ul>
+              </div>
+            </div>
+            <div>
+              <label for="royalQty" class="label">Cantidad</label>
+              <input type="number" id="royalQty" class="input" value="1" min="1" step="1">
+            </div>
+            <div>
+              <label for="royalBasePrice" class="label">Precio compra item base</label>
+              <input type="number" id="royalBasePrice" class="input" value="0" min="0" step="1">
+              <small class="hint">Ej: Túnica de Erudito, Casco de Soldado</small>
+            </div>
+            <div>
+              <label class="label">Precio del Sello Real</label>
+              <div class="sigil-price-display" id="royalSigilPriceDisplay">
+                <img id="royalSigilIcon" class="mat-icon-sm" src="" alt="">
+                <div class="sigil-price-info">
+                  <div class="sigil-price-name"><span id="royalSigilName">Sello Real de Aprendiz</span></div>
+                  <div class="sigil-price-value"><span id="royalSigilValue">0</span> plata</div>
+                </div>
+                <small class="hint">Edita este precio en la pestaña Precios.</small>
+              </div>
+            </div>
+            <div>
+              <label for="royalCraftFee" class="label">Costo crafteo (focus + estación)</label>
+              <input type="number" id="royalCraftFee" class="input" value="2500" min="0" step="100">
+              <small class="hint">Aprox 2-3k de plata</small>
+            </div>
+            <div>
+              <label for="royalSellPrice" class="label">Precio venta item Real (Mercado Negro)</label>
+              <input type="number" id="royalSellPrice" class="input" value="0" min="0" step="1">
+              <small class="hint">Precio en el Mercado Negro (Caerleon)</small>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">📊 Resultado</div>
+        <div class="card-body">
+          <div class="royal-summary">
+            <div class="royal-summary-left">
+              <div class="royal-item-card">
+                <img id="royalItemIcon" class="item-icon-lg" src="" alt="">
+                <div>
+                  <div id="royalItemName" class="royal-item-name">Casco Real</div>
+                  <div id="royalItemMeta" class="royal-item-meta">T4 · Tela · Cantidad: 1</div>
+                </div>
+              </div>
+              <div class="royal-costs">
+                <div class="cost-row"><span>Objeto base (<span id="royalBaseCount">1</span>×)</span><span id="royalBaseCost">0</span></div>
+                <div class="cost-row"><span>Sellos (<span id="royalSigilCount">2</span>× <span id="royalSigilTierLbl">T4</span> × <span id="royalQtyLbl">1</span> und)</span><span id="royalSigilCost">0</span></div>
+                <div class="cost-row"><span>Costo crafteo</span><span id="royalCraftCost">0</span></div>
+                <div class="cost-row total"><span>Inversión total</span><span id="royalTotalCost">0</span></div>
+              </div>
+            </div>
+            <div class="royal-summary-right">
+              <div class="cost-row"><span>Venta (<span id="royalSellQtyLbl">1</span> und)</span><span id="royalGrossRevenue">0</span></div>
+              <div class="cost-row"><span>Impuesto (<span id="royalTaxPctLbl">4</span>%)</span><span id="royalTaxAmount">0</span></div>
+              <div class="cost-row"><span>Ingreso neto</span><span id="royalNetRevenue">0</span></div>
+              <div class="cost-row total"><span>Ganancia</span><span id="royalProfit">0</span></div>
+              <div class="royal-metrics">
+                <div class="metric-pill"><span class="metric-lbl">ROI</span><span id="royalROI">0%</span></div>
+                <div class="metric-pill"><span class="metric-lbl">Margen</span><span id="royalMargin">0%</span></div>
+                <div class="metric-pill"><span class="metric-lbl">Ganancia/unidad</span><span id="royalProfitUnit">0</span></div>
+              </div>
+              <div class="row gap-2" style="margin-top: 1rem;">
+                <button id="royalRegister" class="btn btn-primary">📝 Registrar operación</button>
+                <button id="royalReset" class="btn btn-secondary">↺ Limpiar</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- ========== TAB: PRECIOS ========== -->
     <section id="tab-precios" class="tab-content">
       <div class="card">
@@ -168,10 +306,27 @@
         <div class="card-body">
           <p class="hint">Edita los precios a los que TÚ compraste cada material. Se usan en todas las operaciones.</p>
           <table class="data-table editable-table">
-            <thead><tr><th>Tier</th><th><img class="header-icon" data-mat="runa"  src="https://render.albiononline.com/v1/item/T5_RUNE.png"  alt="">Runa</th><th><img class="header-icon" data-mat="alma"  src="https://render.albiononline.com/v1/item/T5_SOUL.png"  alt="">Alma</th><th><img class="header-icon" data-mat="relic" src="https://render.albiononline.com/v1/item/T5_RELIC.png" alt="">Reliquia</th></tr></thead>
+            <thead><tr><th>Nivel</th><th><img class="header-icon" data-mat="runa"  src="https://render.albiononline.com/v1/item/T5_RUNE.png"  alt="">Runa</th><th><img class="header-icon" data-mat="alma"  src="https://render.albiononline.com/v1/item/T5_SOUL.png"  alt="">Alma</th><th><img class="header-icon" data-mat="relic" src="https://render.albiononline.com/v1/item/T5_RELIC.png" alt="">Reliquia</th></tr></thead>
             <tbody id="preciosBody"></tbody>
           </table>
-          <button id="btnGuardarPrecios" class="btn btn-primary">💾 Guardar Precios</button>
+          <small class="hint" style="display:block;margin-top:0.5rem;">✓ Se guardan automáticamente al editar.</small>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">👑 Precios de Sellos Reales (T4 - T6)</div>
+        <div class="card-body">
+          <p class="hint">Precio por unidad de cada Sello Real. Se usan automáticamente en el módulo de <strong>Sellos Reales</strong>.</p>
+          <table class="data-table editable-table sigilos-table">
+            <thead>
+              <tr>
+                <th>Nivel</th>
+                <th><img class="header-icon" src="https://render.albiononline.com/v1/item/QUESTITEM_TOKEN_ROYAL_T4.png" alt="Aprendiz">Sello Real (por unidad)</th>
+              </tr>
+            </thead>
+            <tbody id="sellosBody"></tbody>
+          </table>
+          <small class="hint" style="display:block;margin-top:0.5rem;">✓ Se guardan automáticamente al editar.</small>
         </div>
       </div>
     </section>
@@ -205,7 +360,7 @@
                 <tr>
                   <th>Fecha</th>
                   <th>Tipo</th>
-                  <th>Tier</th>
+                  <th>Nivel</th>
                   <th>Enc.</th>
                   <th>Cant.</th>
                   <th>P.Compra</th>
@@ -324,66 +479,93 @@
 
     <!-- ========== TAB: SETTINGS ========== -->
     <section id="tab-settings" class="tab-content">
+      <!-- ===== SYNC CARD (minimalist) ===== -->
       <div class="card">
-        <div class="card-header">☁️ Sincronización con GitHub Gist</div>
+        <div class="card-header">☁️ Sincronización</div>
         <div class="card-body">
-          <p>Guarda tus datos en la nube (GitHub Gist privado) para acceder desde <strong>cualquier dispositivo</strong>. Solo tú puedes verlos.</p>
+          <!-- Connected view: just status pill + auto-sync indicator -->
+          <div id="syncConnectedView" class="hidden">
+            <div class="sync-info">
+              <div class="sync-status-row">
+                <span class="sync-pulse-dot"></span>
+                <span><strong>Auto-sync activo</strong></span>
+              </div>
+              <p class="hint" id="syncConnectedInfo" style="margin: 0.5rem 0 0 0;">
+                Tus datos se guardan automáticamente en este dispositivo y en la nube.
+              </p>
+            </div>
+          </div>
 
-          <details class="gist-help">
-            <summary>📖 ¿Cómo configuro esto? (click para ver los pasos)</summary>
-            <ol class="hint" style="margin-top: 0.5rem; padding-left: 1.2rem; line-height: 1.7;">
-              <li>Ve a <a href="https://github.com/settings/tokens/new?scopes=gist&description=Caerleon%20Profit%20Calculator" target="_blank" rel="noopener">github.com/settings/tokens/new</a></li>
-              <li>Selecciona solo el scope <code>gist</code> (ya viene marcado)</li>
-              <li>Click <strong>Generate token</strong> y cópialo (empieza con <code>ghp_...</code>)</li>
-              <li>Pégalo abajo. La app creará un Gist privado automáticamente</li>
-            </ol>
-          </details>
-
-          <div id="syncConfigArea">
+          <!-- Not connected view: token input only -->
+          <div id="syncSetupView">
+            <p class="hint" style="margin-top: 0;">
+              Conecta una vez con GitHub para que tu data se sincronice automáticamente entre dispositivos.
+            </p>
+            <details class="gist-help" style="margin-top: 0.75rem;">
+              <summary>📖 ¿Cómo conecto? (click aquí)</summary>
+              <ol class="hint" style="margin-top: 0.5rem; padding-left: 1.2rem; line-height: 1.7;">
+                <li>Ve a <a href="https://github.com/settings/tokens/new?scopes=gist&description=Caerleon%20Profit%20Calculator" target="_blank" rel="noopener">github.com/settings/tokens/new</a></li>
+                <li>Marca solo el scope <code>gist</code> (ya viene marcado)</li>
+                <li>Click <strong>Generate token</strong> y cópialo (empieza con <code>ghp_...</code>)</li>
+                <li>Pégalo abajo. Solo lo haces una vez.</li>
+              </ol>
+            </details>
             <div class="form-grid" style="margin-top: 1rem;">
               <div>
                 <label for="ghToken" class="label">GitHub Token</label>
                 <input type="password" id="ghToken" class="input" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" autocomplete="off">
-                <small class="hint">Solo se guarda en tu navegador. Nunca se envía a otro servidor que no sea GitHub.</small>
               </div>
               <div>
                 <label for="ghGistId" class="label">Gist ID (opcional)</label>
-                <input type="text" id="ghGistId" class="input" placeholder="se crea automáticamente al guardar">
-                <small class="hint">Déjalo vacío para crear uno nuevo. Si ya tienes uno, pégalo aquí.</small>
+                <input type="text" id="ghGistId" class="input" placeholder="se crea automáticamente">
               </div>
             </div>
-
-            <div class="row gap-2 wrap" style="margin-top: 1rem;">
-              <button id="btnSyncSave" class="btn btn-primary">💾 Guardar y Conectar</button>
-              <button id="btnSyncTest" class="btn btn-secondary">🔌 Probar conexión</button>
-              <button id="btnSyncNow" class="btn btn-secondary hidden">⬆️ Sincronizar ahora</button>
-              <button id="btnSyncPull" class="btn btn-secondary hidden">⬇️ Traer de la nube</button>
-              <button id="btnSyncDisconnect" class="btn btn-danger hidden">🔌 Desconectar</button>
+            <div class="row" style="margin-top: 1rem;">
+              <button id="btnSyncSave" class="btn btn-primary">🔗 Conectar</button>
             </div>
-
-            <div id="syncStatus" class="hint" style="margin-top: 1rem;"></div>
           </div>
+
+          <!-- Hidden status indicator (used internally) -->
+          <div id="syncStatus" class="hidden"></div>
         </div>
       </div>
 
+      <!-- ===== BACKUP CARD (minimalist) ===== -->
       <div class="card">
-        <div class="card-header">💾 Datos y Respaldo Local</div>
+        <div class="card-header">💾 Respaldo Local</div>
         <div class="card-body">
-          <p>Tu data se guarda automáticamente en este navegador (localStorage) <strong>y</strong> en la nube (si conectaste GitHub).</p>
-          <div class="row gap-2 wrap">
-            <button id="btnExport" class="btn btn-primary">📤 Exportar JSON</button>
-            <button id="btnImport" class="btn btn-secondary">📥 Importar JSON</button>
-            <input type="file" id="fileImport" accept=".json" style="display:none">
-            <button id="btnClear" class="btn btn-danger">🗑️ Borrar todo</button>
+          <p class="hint" style="margin: 0;">
+            Tus datos se guardan automáticamente en este navegador.
+          </p>
+          <div id="storageInfo" class="hint" style="margin-top: 0.5rem;"></div>
+          <div id="backupRestoreArea" class="hidden" style="margin-top: 0.75rem;">
+            <button id="btnRestoreBackup" class="btn btn-secondary btn-sm">♻️ Restaurar respaldo automático</button>
           </div>
-          <div id="storageInfo" class="hint" style="margin-top: 1rem;"></div>
         </div>
       </div>
 
+      <!-- ===== ADVANCED (collapsed by default) ===== -->
+      <details class="advanced-section">
+        <summary>⚙️ Opciones avanzadas</summary>
+        <div class="card-body" style="padding-top: 1rem;">
+          <div class="row gap-2 wrap">
+            <button id="btnExport" class="btn btn-secondary btn-sm">📤 Exportar JSON</button>
+            <button id="btnImport" class="btn btn-secondary btn-sm">📥 Importar JSON</button>
+            <input type="file" id="fileImport" accept=".json" style="display:none">
+            <button id="btnSyncTest" class="btn btn-secondary btn-sm">🔌 Probar conexión</button>
+            <button id="btnSyncNow" class="btn btn-secondary btn-sm">⬆️ Forzar push</button>
+            <button id="btnSyncPull" class="btn btn-secondary btn-sm">⬇️ Forzar pull</button>
+            <button id="btnSyncDisconnect" class="btn btn-danger btn-sm">🔌 Desconectar nube</button>
+            <button id="btnClear" class="btn btn-danger btn-sm">🗑️ Borrar todo local</button>
+          </div>
+        </div>
+      </details>
+
+      <!-- ===== ABOUT ===== -->
       <div class="card">
         <div class="card-header">ℹ️ Acerca de</div>
         <div class="card-body">
-          <p><strong>Caerleon Profit Calculator</strong> — Para Albion Online.</p>
+          <p><strong>Calculadora de Profit de Caerleon</strong> — Para Albion Online.</p>
           <p>Calcula profits de Black Market (Caerleon) considerando materiales, encantamientos y tax.</p>
           <p class="hint">Tax: 4% con Premium, 8% sin Premium. Materiales por paso: 2H=384, 1H=288, Pecho/Bolsa=192, Cabeza/Pies/Capa/Secundaria=96.</p>
         </div>

@@ -1167,6 +1167,11 @@ canvas {
   .tab { padding: 0.5rem 0.5rem; font-size: 0.78rem; }
 }
 
+/* ========== HIDDEN UTILITY ========== */
+.hidden {
+  display: none !important;
+}
+
 /* ========== REDUCED MOTION ========== */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -1211,6 +1216,56 @@ canvas {
   border-bottom: 1px dotted var(--accent, #6366f1);
 }
 .gist-help a:hover { border-bottom-style: solid; }
+
+/* ========== MINIMALIST SYNC UI ========== */
+.sync-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.sync-status-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+.sync-pulse-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 0 3px rgba(16,185,129,0.25);
+  animation: pulse-soft 2s ease-in-out infinite;
+}
+@keyframes pulse-soft {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(16,185,129,0.25); }
+  50%      { box-shadow: 0 0 0 6px rgba(16,185,129,0.10); }
+}
+
+/* Advanced section (collapsed by default) */
+.advanced-section {
+  background: var(--bg-secondary, rgba(99, 102, 241, 0.03));
+  border: 1px solid var(--border, rgba(99, 102, 241, 0.15));
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+.advanced-section > summary {
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--text-secondary);
+  user-select: none;
+  font-size: 0.9rem;
+}
+.advanced-section > summary:hover { color: var(--accent, #6366f1); }
+.advanced-section[open] > summary { margin-bottom: 0.5rem; }
+
+/* Small button variant */
+.btn-sm {
+  padding: 0.35rem 0.7rem;
+  font-size: 0.85rem;
+}
 
 .form-grid {
   display: grid;
@@ -1267,3 +1322,276 @@ canvas {
 #syncStatus.ok    { border-left-color: #10b981; }
 #syncStatus.warn  { border-left-color: #f59e0b; }
 #syncStatus.error { border-left-color: #ef4444; }
+
+/* ========== ROYAL SIGIL CRAFTING ========== */
+.royal-summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  align-items: start;
+}
+@media (max-width: 700px) {
+  .royal-summary { grid-template-columns: 1fr; }
+}
+
+.royal-item-card {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem;
+  background: var(--bg-secondary, rgba(99,102,241,0.05));
+  border-radius: 10px;
+  margin-bottom: 1rem;
+}
+.royal-item-card .item-icon-lg {
+  width: 56px;
+  height: 56px;
+  border-radius: 8px;
+  border: 2px solid var(--accent, #6366f1);
+  background: var(--bg-card, white);
+}
+.royal-item-name {
+  font-weight: 600;
+  font-size: 1.05rem;
+  color: var(--text-primary);
+}
+.royal-item-meta {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.royal-costs, .royal-summary-right .cost-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.royal-costs .cost-row, .royal-summary-right .cost-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.35rem 0;
+  font-size: 0.92rem;
+  border-bottom: 1px dashed var(--border, rgba(99,102,241,0.1));
+}
+.royal-costs .cost-row.total,
+.royal-summary-right .cost-row.total {
+  border-bottom: none;
+  border-top: 2px solid var(--accent, #6366f1);
+  padding-top: 0.6rem;
+  margin-top: 0.3rem;
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.royal-metrics {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+.metric-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.8rem;
+  background: var(--bg-secondary, rgba(99,102,241,0.08));
+  border-radius: 999px;
+  font-size: 0.88rem;
+  border: 1px solid var(--border, rgba(99,102,241,0.2));
+}
+.metric-lbl {
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.royal-summary-right {
+  padding: 0.75rem;
+  background: var(--bg-secondary, rgba(99,102,241,0.03));
+  border-radius: 10px;
+  border: 1px solid var(--border, rgba(99,102,241,0.1));
+}
+
+/* ========== SELECT DROPDOWN STYLING ========== */
+select.input,
+.input[type="select"],
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236366f1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: right 0.7rem center;
+  background-size: 1.1rem;
+  padding-right: 2.5rem;
+  cursor: pointer;
+}
+select.input:hover,
+select:hover {
+  border-color: var(--accent, #6366f1);
+}
+select.input:focus,
+select:focus {
+  outline: none;
+  border-color: var(--accent, #6366f1);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+/* Style the dropdown options (where supported) */
+select.input option,
+select option {
+  background: var(--bg-card, white);
+  color: var(--text-primary, #1f2937);
+  padding: 0.5rem;
+}
+
+/* ========== CUSTOM SELECT COMPONENT ========== */
+.cselect {
+  position: relative;
+  width: 100%;
+}
+.cselect-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.6rem 0.9rem;
+  background: var(--bg-card, white);
+  border: 1px solid var(--border, rgba(99,102,241,0.2));
+  border-radius: 8px;
+  font-size: 0.95rem;
+  color: var(--text-primary, #1f2937);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.cselect-trigger:hover {
+  border-color: var(--accent, #6366f1);
+}
+.cselect-trigger:focus,
+.cselect.open .cselect-trigger {
+  outline: none;
+  border-color: var(--accent, #6366f1);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
+}
+.cselect-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cselect-chev {
+  flex-shrink: 0;
+  color: var(--accent, #6366f1);
+  transition: transform 0.15s ease;
+}
+.cselect.open .cselect-chev {
+  transform: rotate(180deg);
+}
+.cselect-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--bg-card, white);
+  border: 1px solid var(--border, rgba(99,102,241,0.25));
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12), 0 2px 6px rgba(0,0,0,0.06);
+  z-index: 100;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px;
+  display: none;
+  margin: 0;
+  list-style: none;
+}
+.cselect-menu.show {
+  display: block;
+}
+.cselect-option {
+  padding: 0.55rem 0.85rem;
+  border-radius: 6px;
+  font-size: 0.93rem;
+  cursor: pointer;
+  color: var(--text-primary, #1f2937);
+  transition: background 0.1s ease, color 0.1s ease;
+  user-select: none;
+}
+.cselect-option:hover {
+  background: var(--bg-secondary, rgba(99,102,241,0.08));
+}
+.cselect-option.active {
+  background: var(--accent, #6366f1);
+  color: white;
+  font-weight: 500;
+}
+.cselect-option.active:hover {
+  background: var(--accent-hover, #4f46e5);
+}
+/* Scrollbar styling */
+.cselect-menu::-webkit-scrollbar { width: 8px; }
+.cselect-menu::-webkit-scrollbar-track { background: transparent; }
+.cselect-menu::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.3); border-radius: 4px; }
+.cselect-menu::-webkit-scrollbar-thumb:hover { background: rgba(99,102,241,0.5); }
+
+/* Remove native select remnants */
+select.input { display: none; }
+
+/* ========== SELLOS REALES PRECIOS TABLE ========== */
+.sigilos-table {
+  max-width: 800px;
+}
+.sigilos-table .sigil-name {
+  font-weight: 500;
+  font-size: 0.92rem;
+}
+.sigilos-table .mat-cell-inline {
+  gap: 0.6rem;
+}
+.sigilos-table .sigil-img {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  background: var(--bg-secondary, rgba(99,102,241,0.05));
+  border: 1px solid var(--border, rgba(99,102,241,0.15));
+}
+
+/* ========== SIGIL PRICE DISPLAY (Royal tab) ========== */
+.sigil-price-display {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.9rem;
+  background: var(--bg-secondary, rgba(99,102,241,0.05));
+  border: 1px solid var(--border, rgba(99,102,241,0.2));
+  border-radius: 8px;
+  flex-wrap: wrap;
+}
+.sigil-price-display .mat-icon-sm {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  background: var(--bg-card, white);
+  border: 1px solid var(--border, rgba(99,102,241,0.15));
+}
+.sigil-price-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  flex: 1;
+  min-width: 120px;
+}
+.sigil-price-name {
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.sigil-price-value {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--accent, #6366f1);
+}
+.sigil-price-display .hint {
+  font-size: 0.78rem;
+  margin-left: auto;
+}

@@ -33,6 +33,24 @@ const MATERIAL_BASE = { runa: 'RUNE', alma: 'SOUL', relic: 'RELIC' };
 
 const IP_BASE = { 4: 700, 5: 800, 6: 900, 7: 1000, 8: 1100 };
 
+// Royal Sigil crafting data (only armor pieces — capes use Crest+Heart, not Sigils)
+// Item ID format for Royal: T{tier}_{SLOT}_{MATERIAL}_ROYAL@{ench} (English IDs required by CDN)
+// Sigil counts DOUBLED per tier (verified from albionfreemarket.com API):
+//   T4 boots/helmet = 2 sigils, T5 = 4, T6 = 8
+//   T4 chest        = 4 sigils, T5 = 8, T6 = 16
+const ROYAL_SLOTS = {
+  helmet: { sigilsPerCraft: { 4: 2, 5: 4, 6: 8 },   matPorPaso: 96,  name: 'Casco Real',   slot: 'HEAD'  },
+  chest:  { sigilsPerCraft: { 4: 4, 5: 8, 6: 16 },  matPorPaso: 192, name: 'Peto Real',    slot: 'ARMOR' },
+  boots:  { sigilsPerCraft: { 4: 2, 5: 4, 6: 8 },   matPorPaso: 96,  name: 'Botas Reales', slot: 'SHOES' },
+};
+const ROYAL_TIER_NAMES = {
+  4: "Sello Real de Aprendiz",
+  5: "Sello Real de Experto",
+  6: "Sello Real de Maestro",
+};
+const ROYAL_MATERIAL_NAMES = { cloth: 'CLOTH', leather: 'LEATHER', plate: 'PLATE' };  // English for CDN
+const ROYAL_MATERIAL_DISPLAY = { cloth: 'Tela', leather: 'Cuero', plate: 'Placa' };
+
 const DEFAULT_PRECIOS = {
   4: { runa: 10,   alma: 66,    relic: 405    },
   5: { runa: 500,  alma: 2500,  relic: 10000  },
@@ -41,7 +59,21 @@ const DEFAULT_PRECIOS = {
   8: { runa: 40000,alma: 200000,relic: 800000 },
 };
 
+const DEFAULT_SELLOS = {
+  4: 4500,   // Sello Real de Aprendiz
+  5: 25000,  // Sello Real de Experto
+  6: 150000, // Sello Real de Maestro
+};
+
+// Royal Sigil CDN IDs (from gameinfo API format)
+const ROYAL_SIGIL_IMG = {
+  4: 'QUESTITEM_TOKEN_ROYAL_T4',
+  5: 'QUESTITEM_TOKEN_ROYAL_T5',
+  6: 'QUESTITEM_TOKEN_ROYAL_T6',
+};
+
 const STORAGE_KEY = 'caerleon_profit_data_v1';
+const BACKUP_KEY = 'caerleon_profit_backup_v1';
 const SYNC_CONFIG_KEY = 'caerleon_sync_config_v1';
 const SYNC_FILENAME = 'caerleon-profit-data.json';
 
@@ -75,6 +107,7 @@ function loadState() {
       const parsed = JSON.parse(raw);
       return {
         precios: parsed.precios || structuredClone(DEFAULT_PRECIOS),
+        sellos: parsed.sellos || structuredClone(DEFAULT_SELLOS),
         registro: parsed.registro || [],
         theme: parsed.theme || 'light',
         premium: parsed.premium !== undefined ? parsed.premium : true,
@@ -85,6 +118,7 @@ function loadState() {
   }
   return {
     precios: structuredClone(DEFAULT_PRECIOS),
+    sellos: structuredClone(DEFAULT_SELLOS),
     registro: [],
     theme: 'light',
     premium: true,
@@ -93,12 +127,24 @@ function loadState() {
 
 function saveState() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    const payload = {
       precios: state.precios,
+      sellos: state.sellos,
       registro: state.registro,
+            sellos: state.sellos,
       theme: state.theme,
       premium: state.premium,
-    }));
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    // Auto-backup: keep last known good state with data
+    if (state.registro.length > 0) {
+      try {
+        localStorage.setItem(BACKUP_KEY, JSON.stringify({
+          ...payload,
+          _backupAt: new Date().toISOString(),
+        }));
+      } catch (e) { /* backup is best-effort */ }
+    }
     // Schedule cloud sync if configured
     if (syncConfig && syncConfig.token && syncConfig.gistId) {
       scheduleSyncPush();
@@ -106,6 +152,31 @@ function saveState() {
   } catch (e) {
     console.error('Error guardando state:', e);
     showToast('Error guardando datos', 'error');
+  }
+}
+
+// Restore from local backup (if main localStorage got wiped or sync wiped data)
+function restoreFromBackup() {
+  try {
+    const raw = localStorage.getItem(BACKUP_KEY);
+    if (!raw) return false;
+    const data = JSON.parse(raw);
+    if (!data.precios || !data.registro) return false;
+    if (data.registro.length === 0) return false;
+    state.precios = data.precios;
+    if (data.sellos) state.sellos = data.sellos;
+    state.registro = data.registro;
+    if (data.premium !== undefined) state.premium = data.premium;
+    saveState();
+    initPrecios();
+    updateCalculadora();
+    updateRegistro();
+    updateDashboard();
+    updateStorageInfo();
+    return true;
+  } catch (e) {
+    console.error('Backup restore failed:', e);
+    return false;
   }
 }
 
@@ -180,7 +251,7 @@ async function testGistConnection(token, gistId) {
 
 async function createGist(token) {
   const body = {
-    description: 'Caerleon Profit Calculator — synced data',
+    description: 'Caerleon Profit Calculator — datos sincronizados',
     public: false,
     files: {
       [SYNC_FILENAME]: {
@@ -189,6 +260,7 @@ async function createGist(token) {
           created: new Date().toISOString(),
           precios: state.precios,
           registro: state.registro,
+            sellos: state.sellos,
           premium: state.premium,
         }, null, 2),
       },
@@ -205,10 +277,36 @@ async function createGist(token) {
 
 async function pushToGist() {
   if (!syncConfig || !syncConfig.token || !syncConfig.gistId) return false;
+
+  // SAFETY: If local is empty BUT remote might have data, check first
+  // This prevents overwriting remote data with empty local state (e.g., when opening app on a new device)
+  if (state.registro.length === 0) {
+    try {
+      const checkRes = await gistApi(`/gists/${syncConfig.gistId}?_=${Date.now()}`, 'GET', null, syncConfig.token);
+      if (checkRes.ok) {
+        const remoteData = await checkRes.json();
+        const remoteFile = remoteData.files[SYNC_FILENAME] || Object.values(remoteData.files)[0];
+        if (remoteFile) {
+          const remote = JSON.parse(remoteFile.content);
+          const remoteCount = remote.registro?.length || 0;
+          if (remoteCount > 0) {
+            // Remote has data but local is empty → pull instead of push
+            console.warn('[Push Safety] Local empty, remote has', remoteCount, 'ops — switching to pull');
+            setSyncStatus('warn', `⚠️ Local vacío · Trayendo ${remoteCount} ops de la nube…`);
+            return await pullFromGist();
+          }
+        }
+      }
+    } catch (e) {
+      // If check fails, proceed with push (might fail too, but user will know)
+      console.warn('[Push Safety] Pre-check failed, proceeding with push:', e.message);
+    }
+  }
+
   setSyncStatus('syncing', 'Subiendo a la nube…');
   try {
     const payload = {
-      description: 'Caerleon Profit Calculator — synced data',
+      description: 'Caerleon Profit Calculator — datos sincronizados',
       files: {
         [SYNC_FILENAME]: {
           content: JSON.stringify({
@@ -216,6 +314,7 @@ async function pushToGist() {
             updated: new Date().toISOString(),
             precios: state.precios,
             registro: state.registro,
+            sellos: state.sellos,
             premium: state.premium,
           }, null, 2),
         },
@@ -288,6 +387,7 @@ async function pullFromGist() {
     const merge = mergeRegistros(state.registro, remote.registro);
     state.registro = merge.merged;
     state.precios = mergePrecios(state.precios, remote.precios);
+    if (remote.sellos) state.sellos = { ...state.sellos, ...remote.sellos };
     if (remote.premium !== undefined) state.premium = remote.premium;
     saveState();
     initPrecios();
@@ -299,7 +399,7 @@ async function pullFromGist() {
     syncStatus.lastSync = new Date();
     if (merge.addedFromRemote > 0 && merge.keptUniqueLocal > 0) {
       setSyncStatus('ok', `⬇️ Merge · ${merge.keptUniqueLocal} locales + ${merge.addedFromRemote} remotas = ${merge.merged.length}`);
-      showToast(`☁️ Merge: ${merge.merged.length} ops totales`, 'success');
+      showToast(`☁️ Sincronización: ${merge.merged.length} operaciones totales`, 'success');
     } else {
       setSyncStatus('ok', `⬇️ ${remoteCount} operaciones traídas${updatedRemote}`);
       showToast(`☁️ ${remoteCount} operaciones sincronizadas`, 'success');
@@ -408,6 +508,7 @@ async function checkRemoteChanges({ silent = true } = {}) {
         // Merge succeeded: new items from remote added to local
         state.registro = merge.merged;
         state.precios = mergePrecios(state.precios, remote.precios);
+    if (remote.sellos) state.sellos = { ...state.sellos, ...remote.sellos };
         saveState();
         initPrecios();
         updateCalculadora();
@@ -416,7 +517,7 @@ async function checkRemoteChanges({ silent = true } = {}) {
         updateStorageInfo();
         syncStatus.lastSync = new Date();
         setSyncStatus('ok', `☁️ Merge · ${merge.keptUniqueLocal} locales + ${merge.addedFromRemote} remotas = ${merge.merged.length} total`);
-        if (!silent) showToast(`☁️ ${merge.addedFromRemote} ops remotas añadidas (total: ${merge.merged.length})`, 'success');
+        if (!silent) showToast(`☁️ ${merge.addedFromRemote} operaciones remotas añadidas (total: ${merge.merged.length})`, 'success');
         // Schedule a push so the gist knows about our merged state
         scheduleSyncPush();
       } else if (merge.keptUniqueLocal > 0) {
@@ -439,6 +540,7 @@ async function checkRemoteChanges({ silent = true } = {}) {
 
 async function applyRemoteData(remote, silent) {
   state.precios = remote.precios;
+  if (remote.sellos) state.sellos = { ...state.sellos, ...remote.sellos };
   state.registro = remote.registro;
   if (remote.premium !== undefined) state.premium = remote.premium;
   saveState();
@@ -482,43 +584,40 @@ function updateSyncUI() {
   const statusEl = document.getElementById('syncStatus');
   const tokenInput = document.getElementById('ghToken');
   const gistInput = document.getElementById('ghGistId');
-  const btnSyncNow = document.getElementById('btnSyncNow');
-  const btnSyncPull = document.getElementById('btnSyncPull');
-  const btnDisconnect = document.getElementById('btnSyncDisconnect');
+  const connectedView = document.getElementById('syncConnectedView');
+  const setupView = document.getElementById('syncSetupView');
+  const connectedInfo = document.getElementById('syncConnectedInfo');
 
   if (!statusEl) return;
 
   const connected = syncConfig && syncConfig.token && syncConfig.gistId;
 
-  // Fill inputs if not focused
-  if (tokenInput && document.activeElement !== tokenInput) {
-    tokenInput.value = syncConfig?.token || '';
-  }
-  if (gistInput && document.activeElement !== gistInput) {
-    gistInput.value = syncConfig?.gistId || '';
+  // Toggle between connected (minimal) and setup views
+  if (connectedView) connectedView.classList.toggle('hidden', !connected);
+  if (setupView) setupView.classList.toggle('hidden', connected);
+
+  // Fill inputs if not focused (only when setup view is shown)
+  if (!connected) {
+    if (tokenInput && document.activeElement !== tokenInput) {
+      tokenInput.value = syncConfig?.token || '';
+    }
+    if (gistInput && document.activeElement !== gistInput) {
+      gistInput.value = syncConfig?.gistId || '';
+    }
   }
 
-  // Toggle buttons
-  if (btnSyncNow)   btnSyncNow.classList.toggle('hidden', !connected);
-  if (btnSyncPull)  btnSyncPull.classList.toggle('hidden', !connected);
-  if (btnDisconnect) btnDisconnect.classList.toggle('hidden', !connected);
-
-  // Status pill
-  const dotClass = syncStatus.state;
-  const lastSyncText = syncStatus.lastSync
-    ? `Última sync: ${syncStatus.lastSync.toLocaleString()}`
-    : '';
-  const userText = syncConfig?.user ? ` · @${syncConfig.user}` : '';
-  statusEl.className = 'hint ' + dotClass;
-  statusEl.innerHTML = `
-    <div class="row gap-2 wrap" style="align-items:center;">
-      <span class="sync-status ${dotClass}">
-        <span class="dot"></span>
-        ${syncStatus.msg}
-      </span>
-      ${connected ? `<span class="hint">${lastSyncText}${userText}</span>` : ''}
-    </div>
-  `;
+  // Connected view info
+  if (connected && connectedInfo) {
+    const lastSyncText = syncStatus.lastSync
+      ? `Última actualización: ${syncStatus.lastSync.toLocaleTimeString()}`
+      : 'Sincronizando…';
+    const userText = syncConfig?.user ? ` · @${syncConfig.user}` : '';
+    const opCount = state.registro.length;
+    connectedInfo.innerHTML = `
+      ${opCount} operación${opCount !== 1 ? 'es' : ''} sincronizada${opCount !== 1 ? 's' : ''} en la nube${userText}
+      <br><small class="hint">${lastSyncText}</small>
+    `;
+  }
 }
 
 async function handleSyncSave() {
@@ -590,6 +689,28 @@ function handleSyncDisconnect() {
   syncStatus.remoteUpdated = null;
   setSyncStatus('idle', 'Desconectado. Datos solo en este dispositivo.');
   showToast('🔌 Sincronización desconectada', 'info');
+}
+
+function handleRestoreBackup() {
+  try {
+    const raw = localStorage.getItem(BACKUP_KEY);
+    if (!raw) {
+      showToast('❌ No hay backup disponible', 'error');
+      return;
+    }
+    const data = JSON.parse(raw);
+    if (!data.registro || data.registro.length === 0) {
+      showToast('❌ Backup está vacío', 'error');
+      return;
+    }
+    const age = data._backupAt ? new Date(data._backupAt).toLocaleString() : '?';
+    if (!confirm(`¿Restaurar ${data.registro.length} operaciones del backup local?\n(Backup de ${age})\n\nEsto REEMPLAZARÁ tus datos actuales.`)) return;
+    if (restoreFromBackup()) {
+      showToast(`♻️ ${data.registro.length} operaciones restauradas`, 'success');
+    }
+  } catch (e) {
+    showToast('❌ Error: ' + e.message, 'error');
+  }
 }
 
 // Period date range computation
@@ -771,11 +892,11 @@ function percentile(arr, p) {
 
 const fmtSilver = n => {
   if (n === null || n === undefined || isNaN(n)) return '—';
-  return Math.round(n).toLocaleString('en-US');
+  return Math.round(n).toLocaleString('es-ES');
 };
 const fmtSilver2 = n => {
   if (n === null || n === undefined || isNaN(n)) return '—';
-  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 const fmtPct = n => {
   if (n === null || n === undefined || isNaN(n)) return '—';
@@ -934,7 +1055,7 @@ function guardarOperacion() {
   const estado = calcEstado(r.profit, r.roi, r.profitUnit, state.registro);
 
   const reg = {
-    fecha: new Date().toISOString().slice(0, 10),
+    fecha: localDateStr(),
     tipo: op.tipo,
     tier: parseInt(op.tier),
     enchIni: parseInt(op.enchIni),
@@ -961,6 +1082,319 @@ function guardarOperacion() {
 }
 
 // =====================================================
+// UI - SELLOS REALES (Royal Sigil Crafting)
+// =====================================================
+
+// Custom Select component (replaces native <select> for full styling control)
+function initCustomSelects(root = document) {
+  root.querySelectorAll('.cselect:not([data-cs-init])').forEach(el => {
+    const trigger = el.querySelector('.cselect-trigger');
+    const label = el.querySelector('.cselect-label');
+    const menu = el.querySelector('.cselect-menu');
+    const options = el.querySelectorAll('.cselect-option');
+    if (!trigger || !menu) return;
+
+    // Initial value from active option
+    const active = menu.querySelector('.cselect-option.active') || options[0];
+    if (active) {
+      el.dataset.value = active.dataset.value;
+      label.textContent = active.textContent;
+    }
+
+    el.dataset.csInit = '1';
+    let openMenu = null;
+
+    function open() {
+      // Close any other open
+      document.querySelectorAll('.cselect.open').forEach(o => {
+        if (o !== el) o.classList.remove('open');
+      });
+      el.classList.add('open');
+      trigger.setAttribute('aria-expanded', 'true');
+      // Position the menu
+      openMenu = menu;
+      menu.classList.add('show');
+      // Scroll active into view
+      const a = menu.querySelector('.cselect-option.active');
+      if (a) a.scrollIntoView({ block: 'nearest' });
+    }
+    function close() {
+      el.classList.remove('open');
+      trigger.setAttribute('aria-expanded', 'false');
+      menu.classList.remove('show');
+    }
+
+    trigger.addEventListener('click', e => {
+      e.stopPropagation();
+      if (el.classList.contains('open')) close(); else open();
+    });
+    trigger.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.classList.contains('open') ? close() : open(); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); if (!el.classList.contains('open')) open(); focusNext(1); }
+      else if (e.key === 'Escape') close();
+    });
+
+    options.forEach(opt => {
+      opt.addEventListener('click', e => {
+        e.stopPropagation();
+        options.forEach(o => o.classList.remove('active'));
+        opt.classList.add('active');
+        el.dataset.value = opt.dataset.value;
+        label.textContent = opt.textContent;
+        close();
+        el.dispatchEvent(new CustomEvent('cselect:change', { detail: { value: opt.dataset.value } }));
+      });
+    });
+
+    function focusNext(dir) {
+      const opts = Array.from(options);
+      const cur = opts.findIndex(o => o.classList.contains('active'));
+      const next = opts[(cur + dir + opts.length) % opts.length];
+      if (next) { next.click(); }
+    }
+  });
+}
+
+// Close all custom selects when clicking outside
+document.addEventListener('click', () => {
+  document.querySelectorAll('.cselect.open').forEach(o => o.classList.remove('open'));
+  document.querySelectorAll('.cselect-menu.show').forEach(m => m.classList.remove('show'));
+});
+
+function initRoyal() {
+  // Initialize custom selects and bind change events
+  ['royalSlot', 'royalTier', 'royalMaterial'].forEach(name => {
+    const cs = document.querySelector(`.cselect[data-cs="${name}"]`);
+    if (cs) {
+      cs.addEventListener('cselect:change', () => {
+        if (name === 'royalSlot') syncMaterialVisibility();
+        if (name === 'royalTier') updateRoyalSigilPrice(); // auto-fill from Precios tab
+        updateRoyalCalc();
+      });
+    }
+  });
+
+  // Premium toggle syncs with main one
+  const premEl = document.getElementById('royalPremium');
+  premEl.checked = state.premium;
+  premEl.addEventListener('change', () => {
+    state.premium = premEl.checked;
+    saveState();
+    document.getElementById('cfgPremium').checked = premEl.checked;
+    updateRoyalDebug();
+    updateRoyalCalc();
+  });
+
+  const qtyEl  = document.getElementById('royalQty');
+  const baseEl = document.getElementById('royalBasePrice');
+  const feeEl  = document.getElementById('royalCraftFee');
+  const sellEl = document.getElementById('royalSellPrice');
+
+  [qtyEl, baseEl, feeEl, sellEl].forEach(el => {
+    el.addEventListener('input', updateRoyalCalc);
+    el.addEventListener('change', updateRoyalCalc);
+  });
+
+  function syncMaterialVisibility() {
+    document.getElementById('royalMaterialWrap').classList.add('hidden');
+  }
+  syncMaterialVisibility();
+
+  document.getElementById('royalRegister').addEventListener('click', registerRoyalOperation);
+  document.getElementById('royalReset').addEventListener('click', () => {
+    baseEl.value = 0; sellEl.value = 0; qtyEl.value = 1;
+    updateRoyalCalc();
+  });
+
+  updateRoyalDebug();
+  updateRoyalCalc();
+}
+
+function updateRoyalDebug() {
+  const prem = state.premium;
+  const tax = prem ? 0.04 : 0.08;
+  const el = document.getElementById('royalDebugTax');
+  if (el) el.textContent = `premium=${prem} | impuesto=${(tax*100).toFixed(0)}% | cálculo: 100000 × ${(1-tax).toFixed(2)} = ${Math.round(100000*(1-tax))}`;
+  const taxHint = document.getElementById('royalTaxHint');
+  if (taxHint) taxHint.textContent = `Impuesto: ${(tax*100).toFixed(0)}% ${prem ? 'con Premium' : 'sin Premium'}.`;
+}
+
+function getRoyalInputs() {
+  const getCs = name => document.querySelector(`.cselect[data-cs="${name}"]`)?.dataset.value;
+  const tier = parseInt(getCs('royalTier') || '4');
+  // Sigil price comes from state.sellos (set in Precios tab) — read-only here
+  const sigilPrice = (state.sellos && state.sellos[tier]) || 0;
+  return {
+    slot: getCs('royalSlot') || 'helmet',
+    tier,
+    material: getCs('royalMaterial') || 'cloth',
+    qty: Math.max(1, parseInt(document.getElementById('royalQty').value) || 1),
+    basePrice: Math.max(0, parseFloat(document.getElementById('royalBasePrice').value) || 0),
+    sigilPrice,
+    craftFee: Math.max(0, parseFloat(document.getElementById('royalCraftFee').value) || 0),
+    sellPrice: Math.max(0, parseFloat(document.getElementById('royalSellPrice').value) || 0),
+  };
+}
+
+function calcRoyal(inp) {
+  const slot = ROYAL_SLOTS[inp.slot];
+  const sigilsPerCraft = slot.sigilsPerCraft[inp.tier] || slot.sigilsPerCraft[4];
+  const totalSigils = sigilsPerCraft * inp.qty;
+  const baseCost = inp.basePrice * inp.qty;
+  const sigilCost = inp.sigilPrice * totalSigils;
+  const craftCost = inp.craftFee; // craft fee is per BATCH (not per unit), keep as single
+  const totalCost = baseCost + sigilCost + craftCost;
+
+  const gross = inp.sellPrice * inp.qty;
+  const taxRate = state.premium ? 0.04 : 0.08;
+  const taxAmount = gross * taxRate;
+  const netRevenue = gross - taxAmount;
+  const profit = netRevenue - totalCost;
+  const roi = totalCost > 0 ? (profit / totalCost) * 100 : 0;
+  const margin = gross > 0 ? (profit / gross) * 100 : 0;
+  const profitUnit = inp.qty > 0 ? profit / inp.qty : 0;
+  const breakeven = taxRate < 1 ? totalCost / (1 - taxRate) : Infinity;
+
+  return {
+    sigilsPerCraft,
+    totalSigils,
+    baseCost,
+    sigilCost,
+    craftCost,
+    totalCost,
+    gross,
+    taxRate,
+    taxAmount,
+    netRevenue,
+    profit,
+    roi,
+    margin,
+    profitUnit,
+    breakeven,
+  };
+}
+
+function localDateStr(d) {
+  // Returns local date as YYYY-MM-DD (uses user's timezone, not UTC)
+  const date = d || new Date();
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function fmt(n) {
+  if (!isFinite(n)) return '∞';
+  return Math.round(n).toLocaleString('es-ES');
+}
+
+function updateRoyalCalc() {
+  const inp = getRoyalInputs();
+  const r = calcRoyal(inp);
+  const slot = ROYAL_SLOTS[inp.slot];
+  const tierName = ROYAL_TIER_NAMES[inp.tier];
+
+  // Item icon & name
+  const iconEl = document.getElementById('royalItemIcon');
+  const nameEl = document.getElementById('royalItemName');
+  const metaEl = document.getElementById('royalItemMeta');
+
+  // Build Royal item ID: T{tier}_{SLOT}_{MATERIAL}_ROYAL@0  (English IDs required by CDN)
+  const itemId = `T${inp.tier}_${slot.slot}_${ROYAL_MATERIAL_NAMES[inp.material]}_ROYAL@0`;
+  const displayName = `${slot.name} T${inp.tier} (${ROYAL_MATERIAL_DISPLAY[inp.material]})`;
+  iconEl.src = imgUrl(itemId);
+  iconEl.alt = displayName;
+  iconEl.onerror = () => {
+    const fallback = `T${inp.tier}_${slot.slot}_${ROYAL_MATERIAL_NAMES[inp.material]}_ROYAL`;
+    if (iconEl.src !== imgUrl(fallback)) {
+      iconEl.src = imgUrl(fallback);
+      iconEl.onerror = () => {
+        iconEl.onerror = null;
+        iconEl.src = 'img/T5_HEAD_CLOTH_SET1.png';
+        iconEl.style.opacity = '0.4';
+      };
+    }
+  };
+  nameEl.textContent = displayName;
+  metaEl.textContent = `T${inp.tier} · ${ROYAL_MATERIAL_DISPLAY[inp.material]} · Cantidad: ${inp.qty}`;
+
+  // Costs
+  document.getElementById('royalBaseCount').textContent = inp.qty;
+  document.getElementById('royalSigilCount').textContent = r.sigilsPerCraft;
+  document.getElementById('royalSigilTierLbl').textContent = `T${inp.tier}`;
+  document.getElementById('royalQtyLbl').textContent = inp.qty;
+  // Sigil name & price display (from Precios tab)
+  document.getElementById('royalSigilName').textContent = tierName;
+  document.getElementById('royalSigilValue').textContent = inp.sigilPrice.toLocaleString('es-ES');
+  const sigIcon = document.getElementById('royalSigilIcon');
+  if (sigIcon) {
+    sigIcon.src = imgUrl(ROYAL_SIGIL_IMG[inp.tier]);
+    sigIcon.onerror = () => { sigIcon.onerror = null; sigIcon.style.opacity = '0.25'; };
+  }
+  document.getElementById('royalBaseCost').textContent = fmt(r.baseCost);
+  document.getElementById('royalSigilCost').textContent = fmt(r.sigilCost);
+  document.getElementById('royalCraftCost').textContent = fmt(r.craftCost);
+  document.getElementById('royalTotalCost').textContent = fmt(r.totalCost);
+
+  // Revenue
+  document.getElementById('royalSellQtyLbl').textContent = inp.qty;
+  document.getElementById('royalTaxPctLbl').textContent = (r.taxRate * 100).toFixed(0);
+  document.getElementById('royalGrossRevenue').textContent = fmt(r.gross);
+  document.getElementById('royalTaxAmount').textContent = '−' + fmt(r.taxAmount);
+  document.getElementById('royalNetRevenue').textContent = fmt(r.netRevenue);
+  document.getElementById('royalProfit').textContent = (r.profit >= 0 ? '' : '−') + fmt(Math.abs(r.profit));
+  document.getElementById('royalProfit').style.color = r.profit >= 0 ? 'var(--success, #10b981)' : 'var(--danger, #ef4444)';
+
+  // Metrics
+  document.getElementById('royalROI').textContent = fmt(r.roi) + '%';
+  document.getElementById('royalMargin').textContent = fmt(r.margin) + '%';
+  document.getElementById('royalProfitUnit').textContent = fmt(r.profitUnit);
+}
+
+function registerRoyalOperation() {
+  const inp = getRoyalInputs();
+  if (inp.basePrice <= 0 && inp.sigilPrice <= 0) {
+    showToast('❌ Ingresa al menos un precio para registrar', 'error');
+    return;
+  }
+  const r = calcRoyal(inp);
+  const slot = ROYAL_SLOTS[inp.slot];
+  const itemId = `T${inp.tier}_${slot.slot}_${ROYAL_MATERIAL_NAMES[inp.material]}_ROYAL@0`;
+  const displayName = `${slot.name} T${inp.tier} (${ROYAL_MATERIAL_DISPLAY[inp.material]})`;
+
+  const reg = {
+    id: 'r_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+    fecha: localDateStr(),
+    tipo: 'Sellos Reales',
+    tier: inp.tier,
+    enchIni: 0,
+    enchFin: 0,
+    calidad: 'Normal',
+    qty: inp.qty,
+    pCompra: inp.basePrice,
+    pVenta: inp.sellPrice,
+    pDir: 0,
+    icon: itemId,
+    royalSlot: inp.slot,
+    royalMaterial: inp.material,
+    sigilPrice: inp.sigilPrice,
+    sigilCount: r.totalSigils,
+    craftFee: inp.craftFee,
+    sigilCost: r.sigilCost,
+    profit: r.profit,
+    revNeto: r.netRevenue,
+    profitUnit: r.profitUnit,
+    roi: r.roi / 100,
+    inversion: r.totalCost,
+    notas: `${r.sigilsPerCraft}× ${ROYAL_TIER_NAMES[inp.tier]} · ${ROYAL_MATERIAL_DISPLAY[inp.material]}`,
+  };
+  state.registro.push(reg);
+  saveState();
+  updateRegistro();
+  showToast(`✅ Crafteo real registrado: ${fmt(r.profit)} de ganancia`, 'success');
+}
+
+// =====================================================
 // UI - PRECIOS MATERIALES
 // =====================================================
 
@@ -978,6 +1412,24 @@ function initPrecios() {
     tbody.appendChild(tr);
   });
 
+  // Royal Sigils prices (T4-T6) - one row per tier, matches materials layout
+  const sellosTbody = document.getElementById('sellosBody');
+  if (sellosTbody) {
+    sellosTbody.innerHTML = '';
+    [4,5,6].forEach(tier => {
+      const tr = document.createElement('tr');
+      const sigilId = ROYAL_SIGIL_IMG[tier];
+      tr.innerHTML = `
+        <td><strong>T${tier}</strong></td>
+        <td><div class="mat-cell-inline">
+          <img class="mat-icon-sm sigil-img" src="${imgUrl(sigilId)}" alt="Sello T${tier}" onerror="this.onerror=null;this.style.opacity='0.25';">
+          <input type="number" data-sigil="${tier}" value="${state.sellos[tier] || 0}" min="0" step="100">
+        </div></td>
+      `;
+      sellosTbody.appendChild(tr);
+    });
+  }
+
   // Auto-save on every price change (debounced → triggers saveState() → sync push)
   let precioSaveTimer = null;
   function autoSavePrecio() {
@@ -988,28 +1440,28 @@ function initPrecios() {
       if (!state.precios[tier]) state.precios[tier] = { runa: 0, alma: 0, relic: 0 };
       state.precios[tier][mat] = val;
     });
+    document.querySelectorAll('#sellosBody input').forEach(inp => {
+      const tier = parseInt(inp.dataset.sigil);
+      const val = Math.max(0, parseFloat(inp.value) || 0);
+      if (!state.sellos) state.sellos = structuredClone(DEFAULT_SELLOS);
+      state.sellos[tier] = val;
+    });
     if (precioSaveTimer) clearTimeout(precioSaveTimer);
     precioSaveTimer = setTimeout(() => {
-      saveState();   // → triggers scheduleSyncPush() if configured
+      saveState();
       updateCalculadora();
+      updateRoyalSigilPrice();
     }, 800);
   }
-  document.querySelectorAll('#preciosBody input').forEach(inp => {
+  document.querySelectorAll('#preciosBody input, #sellosBody input').forEach(inp => {
     inp.addEventListener('input', autoSavePrecio);
   });
+}
 
-  // Keep the manual button as backup (in case)
-  const btnGuardar = document.getElementById('btnGuardarPrecios');
-  if (btnGuardar) {
-    btnGuardar.addEventListener('click', () => {
-      if (precioSaveTimer) clearTimeout(precioSaveTimer);
-      autoSavePrecio();
-      precioSaveTimer = setTimeout(() => {
-        saveState();
-        showToast('✅ Precios guardados', 'success');
-      }, 100);
-    });
-  }
+// Auto-fill sigil price in Royal tab when tier changes
+function updateRoyalSigilPrice() {
+  // No-op now — sigil price is read directly from state.sellos in getRoyalInputs()
+  // Kept for backward compatibility (called from autoSavePrecio)
 }
 
 // =====================================================
@@ -1223,7 +1675,7 @@ function updateDashboard() {
 
 function formatKpi(v, fmt) {
   if (fmt === 'pct') return (v * 100).toFixed(1) + '%';
-  if (fmt === 'money') return Math.round(v).toLocaleString('en-US');
+  if (fmt === 'money') return Math.round(v).toLocaleString('es-ES');
   return String(Math.round(v));
 }
 
@@ -1624,6 +2076,8 @@ function initSettings() {
   document.getElementById('btnSyncNow').addEventListener('click', pushToGist);
   document.getElementById('btnSyncPull').addEventListener('click', pullFromGist);
   document.getElementById('btnSyncDisconnect').addEventListener('click', handleSyncDisconnect);
+  const btnRestore = document.getElementById('btnRestoreBackup');
+  if (btnRestore) btnRestore.addEventListener('click', handleRestoreBackup);
 
   // Dashboard period/goal controls
   populateMonthSelect();
@@ -1696,8 +2150,26 @@ function populateMonthSelect() {
 
 function updateStorageInfo() {
   const size = (JSON.stringify(state).length / 1024).toFixed(1);
+  let backupInfo = '';
+  let hasBackup = false;
+  try {
+    const raw = localStorage.getItem(BACKUP_KEY);
+    if (raw) {
+      const b = JSON.parse(raw);
+      const age = b._backupAt ? new Date(b._backupAt).toLocaleString() : '?';
+      hasBackup = b.registro && b.registro.length > 0;
+      backupInfo = `<br><small class="hint">♻️ Respaldo: ${b.registro?.length || 0} ops guardado${hasBackup ? ` (${age})` : ''}</small>`;
+    }
+  } catch (e) {}
   document.getElementById('storageInfo').innerHTML =
-    `<strong>Datos guardados:</strong> ${state.registro.length} operaciones, ${size} KB usados del localStorage.`;
+    `<strong>Datos guardados:</strong> ${state.registro.length} operaciones, ${size} KB${backupInfo}`;
+
+  // Show restore button ONLY if local is empty and backup has data
+  const restoreArea = document.getElementById('backupRestoreArea');
+  if (restoreArea) {
+    const showRestore = state.registro.length === 0 && hasBackup;
+    restoreArea.classList.toggle('hidden', !showRestore);
+  }
 }
 
 function exportarJSON() {
@@ -1706,6 +2178,7 @@ function exportarJSON() {
     exportDate: new Date().toISOString(),
     precios: state.precios,
     registro: state.registro,
+            sellos: state.sellos,
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -1727,6 +2200,7 @@ function importarJSON(e) {
       if (!data.precios || !data.registro) throw new Error('Formato inválido');
       if (!confirm(`¿Importar ${data.registro.length} operaciones? Esto REEMPLAZARÁ tus datos actuales.`)) return;
       state.precios = data.precios;
+      if (data.sellos) state.sellos = data.sellos;
       state.registro = data.registro;
       saveState();
       initPrecios();
@@ -1748,6 +2222,7 @@ function borrarTodo() {
   if (!confirm('¿Seguro? Tus operaciones y precios se perderán.')) return;
   state = {
     precios: structuredClone(DEFAULT_PRECIOS),
+    sellos: structuredClone(DEFAULT_SELLOS),
     registro: [],
     theme: state.theme,
   };
@@ -1823,11 +2298,32 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   initTheme();
   initTabs();
+  initCustomSelects();
   initCalculadora();
+  initRoyal();
   initPrecios();
   initRegistro();
   initDashboard();
   initSettings();
+
+  // SAFETY CHECK: If local is empty BUT we have a backup, offer to restore
+  if (state.registro.length === 0) {
+    try {
+      const raw = localStorage.getItem(BACKUP_KEY);
+      if (raw) {
+        const backup = JSON.parse(raw);
+        if (backup.registro && backup.registro.length > 0) {
+          const age = backup._backupAt ? new Date(backup._backupAt).toLocaleString() : '?';
+          if (confirm(`⚠️ Detecté que tu local está vacío pero hay un backup con ${backup.registro.length} operaciones (de ${age}).\n\n¿Restaurar desde backup?\n(Cancela si quieres descargar de la nube)`)) {
+            if (restoreFromBackup()) {
+              showToast(`♻️ ${backup.registro.length} operaciones restauradas del backup`, 'success');
+              console.log('[Safety] Restored from local backup');
+            }
+          }
+        }
+      }
+    } catch (e) { /* best effort */ }
+  }
 
   // Auto-pull from cloud on init if configured AND local is empty
   if (syncConfig && syncConfig.token && syncConfig.gistId) {
