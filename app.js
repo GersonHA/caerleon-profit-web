@@ -279,9 +279,9 @@ async function createGist(token) {
 async function pushToGist() {
   if (!syncConfig || !syncConfig.token || !syncConfig.gistId) return false;
 
-  // SAFETY: If local is empty BUT remote might have data, check first
-  // This prevents overwriting remote data with empty local state (e.g., when opening app on a new device)
+  // SAFETY: ALWAYS check remote before pushing to avoid overwriting more data
   if (state.registro.length === 0) {
+    // Local empty → pull if remote has anything
     try {
       const checkRes = await gistApi(`/gists/${syncConfig.gistId}?_=${Date.now()}`, 'GET', null, syncConfig.token);
       if (checkRes.ok) {
@@ -291,7 +291,6 @@ async function pushToGist() {
           const remote = JSON.parse(remoteFile.content);
           const remoteCount = remote.registro?.length || 0;
           if (remoteCount > 0) {
-            // Remote has data but local is empty → pull instead of push
             console.warn('[Push Safety] Local empty, remote has', remoteCount, 'ops — switching to pull');
             setSyncStatus('warn', `⚠️ Local vacío · Trayendo ${remoteCount} ops de la nube…`);
             return await pullFromGist();
@@ -299,46 +298,115 @@ async function pushToGist() {
         }
       }
     } catch (e) {
-      // If check fails, proceed with push (might fail too, but user will know)
+      console.warn('[Push Safety] Pre-check failed, proceeding with push:', e.message);
+    }
+  } else {
+    // Local has data → CRITICAL: don't push if remote has MORE ops
+    try {
+      const checkRes = await gistApi(`/gists/${syncConfig.gistId}?_=${Date.now()}`, 'GET', null, syncConfig.token);
+      if (checkRes.ok) {
+        const remoteData = await checkRes.json();
+        const remoteFile = remoteData.files[SYNC_FILENAME] || Object.values(remoteData.files)[0];
+        if (remoteFile) {
+          const remote = JSON.parse(remoteFile.content);
+          const remoteCount = remote.registro?.length || 0;
+          const localCount = state.registro.length;
+          if (remoteCount > localCount) {
+            console.warn(`[Push Safety] Local ${localCount} < Remote ${remoteCount} — pulling instead`);
+            setSyncStatus('warn', `⚠️ Nube tiene ${remoteCount} ops (más que local) · mergeando…`);
+            const merge = mergeRegistros(state.registro, remote.registro);
+            state.registro = merge.merged;
+            state.precios = mergePrecios(state.precios, remote.precios);
+            if (remote.sellos) state.sellos = { ...state.sellos, ...remote.sellos };
+            if (remote._updated) state._updated = remote._updated;
+            saveState();
+            initPrecios();
+            updateCalculadora();
+            updateRegistro();
+            updateDashboard();
+            updateStorageInfo();
+            syncStatus.lastSync = new Date();
+            setSyncStatus('ok', `☁️ Merge · ${merge.keptUniqueLocal}+${merge.addedFromRemote} = ${merge.merged.length}`);
+            showToast(`☁️ ${merge.addedFromRemote} ops nuevas (total: ${merge.merged.length})`, 'success');
+            return true;
+          }
+        }
+      }
+    } catch (e) {
       console.warn('[Push Safety] Pre-check failed, proceeding with push:', e.message);
     }
   }
 
   setSyncStatus('syncing', 'Subiendo a la nube…');
-  try {
-    const payload = {
-      description: 'Caerleon Profit Calculator — datos sincronizados',
-      files: {
-        [SYNC_FILENAME]: {
-          content: JSON.stringify({
-            version: 1,
-            updated: new Date().toISOString(),
-            precios: state.precios,
-            registro: state.registro,
-            sellos: state.sellos,
-            premium: state.premium,
-          }, null, 2),
-        },
+
+  const expectedContent = JSON.stringify({
+    version: 1,
+    updated: new Date().toISOString(),
+    precios: state.precios,
+    registro: state.registro,
+    sellos: state.sellos,
+    premium: state.premium,
+  }, null, 2);
+
+  const payload = {
+    description: 'Caerleon Profit Calculator — datos sincronizados',
+    files: {
+      [SYNC_FILENAME]: {
+        content: expectedContent,
       },
-    };
-    const res = await gistApi(`/gists/${syncConfig.gistId}`, 'PATCH', payload, syncConfig.token);
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.message || `Error subiendo (${res.status})`);
+    },
+  };
+
+  // Retry up to 2 times
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const res = await gistApi(`/gists/${syncConfig.gistId}?_t=${Date.now()}`, 'PATCH', payload, syncConfig.token);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || `Error subiendo (${res.status})`);
+      }
+
+      // VERIFY the push actually went through (read back and compare)
+      const verifyRes = await gistApi(`/gists/${syncConfig.gistId}?_t=${Date.now()}&v=${Math.random()}`, 'GET', null, syncConfig.token);
+      if (verifyRes.ok) {
+        const verifyData = await verifyRes.json();
+        const verifyFile = verifyData.files[SYNC_FILENAME];
+        const verifyContent = verifyFile?.content;
+        if (verifyContent === expectedContent) {
+          // Success! Verification passed
+          if (verifyData.updated_at) syncStatus.remoteUpdated = verifyData.updated_at;
+          syncStatus.lastSync = new Date();
+          setSyncStatus('ok', `✅ Sincronizado ${syncStatus.lastSync.toLocaleTimeString()} (${state.registro.length} ops)`);
+          showToast(`☁️ Push verificado · ${state.registro.length} ops en la nube`, 'success');
+          return true;
+        } else {
+          // Verification failed — content mismatch
+          console.warn(`[Push] Attempt ${attempt}: content mismatch after PATCH. Expected length ${expectedContent.length}, got ${verifyContent?.length}`);
+          if (attempt < 2) {
+            await new Promise(r => setTimeout(r, 500)); // wait 500ms before retry
+            continue;
+          }
+          throw new Error('Verificación falló: el contenido no coincide después de 2 intentos. Intenta manualmente.');
+        }
+      } else {
+        // Verification GET failed, but PATCH succeeded — assume it worked
+        console.warn('[Push] Verification GET failed, trusting PATCH response');
+        syncStatus.lastSync = new Date();
+        setSyncStatus('ok', `✅ Sincronizado (sin verificación)`);
+        showToast(`☁️ Push completo · ${state.registro.length} ops`, 'success');
+        return true;
+      }
+    } catch (e) {
+      console.error(`[Push] Attempt ${attempt} failed:`, e.message);
+      if (attempt === 2) {
+        setSyncStatus('error', `❌ ${e.message}`);
+        showToast(`Error push: ${e.message}`, 'error');
+        return false;
+      }
+      await new Promise(r => setTimeout(r, 1000)); // wait 1s before retry
     }
-    const data = await res.json();
-    // Track new remote timestamp to prevent auto-sync from re-pulling our own changes
-    if (data.updated_at) syncStatus.remoteUpdated = data.updated_at;
-    syncStatus.lastSync = new Date();
-    setSyncStatus('ok', `✅ Sincronizado ${syncStatus.lastSync.toLocaleTimeString()}`);
-    // Show visible toast confirming push
-    showToast(`☁️ Push completo · ${state.registro.length} operación${state.registro.length !== 1 ? 'es' : ''} sincronizada${state.registro.length !== 1 ? 's' : ''}`, 'success');
-    return true;
-  } catch (e) {
-    console.error('Sync push error:', e);
-    setSyncStatus('error', `❌ ${e.message}`);
-    return false;
   }
+  return false;
 }
 
 async function pullFromGist() {
@@ -509,15 +577,43 @@ async function checkRemoteChanges({ silent = true } = {}) {
       return false;
     }
 
-    console.log('[AutoSync] Compare:', { localUpdated, remoteUpdated, localCount: state.registro.length, remoteCount: remote.registro?.length || 0 });
+    const localCount = state.registro.length;
+    const remoteCount = remote.registro?.length || 0;
 
-    // Determine which is newer
+    console.log('[AutoSync] Compare:', { localUpdated, remoteUpdated, localCount, remoteCount });
+
+    // SAFETY: NEVER push if local has fewer ops than remote (could wipe data)
+    if (localCount > 0 && remoteCount > localCount) {
+      console.warn('[AutoSync] SAFETY: Local has fewer ops than remote — switching to pull instead of push');
+      setSyncStatus('warn', `⚠️ Local tiene ${localCount} ops · nube tiene ${remoteCount} · trayendo…`);
+      if (localCount === 0) {
+        await applyRemoteData(remote, silent);
+      } else {
+        const merge = mergeRegistros(state.registro, remote.registro);
+        if (merge.addedFromRemote > 0) {
+          state.registro = merge.merged;
+          state.precios = mergePrecios(state.precios, remote.precios);
+          if (remote.sellos) state.sellos = { ...state.sellos, ...remote.sellos };
+          state._updated = remoteUpdated;
+          saveState();
+          initPrecios();
+          updateCalculadora();
+          updateRegistro();
+          updateDashboard();
+          updateStorageInfo();
+          syncStatus.lastSync = new Date();
+          setSyncStatus('ok', `☁️ Merge · ${merge.keptUniqueLocal} locales + ${merge.addedFromRemote} remotas = ${merge.merged.length}`);
+          if (!silent) showToast(`☁️ ${merge.addedFromRemote} ops nuevas de la nube (total: ${merge.merged.length})`, 'success');
+        }
+      }
+      return true;
+    }
+
+    // Determine which is newer (only when counts are equal or local has more)
     const remoteIsNewer = !localUpdated || remoteUpdated > localUpdated;
 
     if (remoteIsNewer) {
       // Remote is newer (or local is empty) → pull
-      const remoteCount = remote.registro?.length || 0;
-      const localCount = state.registro.length;
       if (localCount === 0) {
         // Local empty, just take remote
         await applyRemoteData(remote, silent);
