@@ -1598,17 +1598,24 @@ select.input { display: none; }
 
 /* ========== OPTION B: VENTAS EXPANDIBLES ========== */
 .op-row {
-  cursor: pointer;
   transition: background 0.1s ease;
 }
 .op-row:hover {
-  background: rgba(99,102,241,0.04);
+  background: rgba(99,102,241,0.02);
 }
 .expand-btn {
   background: transparent;
   border: none;
-  font-size: 0.85rem;
+  font-size: 1rem;
   color: var(--accent, #6366f1);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-family: inherit;
+}
+.expand-btn:hover {
+  background: rgba(99,102,241,0.1);
+}
   cursor: pointer;
   padding: 0;
   width: 20px;

@@ -1710,21 +1710,20 @@ function initRegistro() {
     updateRegistro();
   });
 
-  // Event delegation for expand/collapse rows (prevents scroll-to-top from button focus)
+  // Event delegation for expand button only (avoids any row-click weirdness)
   const tbody = document.getElementById('registroBody');
   if (tbody && !tbody.dataset.boundToggle) {
     tbody.addEventListener('click', (e) => {
+      // ONLY respond to clicks on the expand button itself
       const expandBtn = e.target.closest('.expand-btn');
-      const opRow = e.target.closest('tr.op-row');
-      if (expandBtn && opRow) {
-        e.preventDefault();
-        e.stopPropagation();
-        toggleOpDetail(opRow.dataset.opId);
-      } else if (opRow && !e.target.closest('button') && !e.target.closest('input') && !e.target.closest('select')) {
-        // Click anywhere in the row (except form elements) also toggles
-        e.preventDefault();
-        toggleOpDetail(opRow.dataset.opId);
-      }
+      if (!expandBtn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      // Find the parent row that contains this button
+      const opRow = expandBtn.closest('tr.op-row');
+      if (!opRow) return;
+      const opId = opRow.getAttribute('data-op-id');
+      if (opId) toggleOpDetail(opId);
     });
     tbody.dataset.boundToggle = '1';
   }
