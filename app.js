@@ -1717,7 +1717,14 @@ function initRegistro() {
 function updateRegistro() {
   const search = document.getElementById('regSearch').value.toLowerCase();
   const filterTipo = document.getElementById('regFilterTipo').value;
-  const filterEstado = document.getElementById('regFilterEstado').value;
+  // Validate filterEstado: must be one of the known status values
+  const validEstados = ['vendido', 'pendiente', 'fallido', 'crafteado'];
+  let filterEstado = document.getElementById('regFilterEstado').value;
+  if (filterEstado && !validEstados.includes(filterEstado)) {
+    // Legacy/invalid value — clear it
+    document.getElementById('regFilterEstado').value = '';
+    filterEstado = '';
+  }
 
   let items = [...state.registro];
   if (search) items = items.filter(r =>
@@ -1753,7 +1760,7 @@ function updateRegistro() {
       pendiente: '⏳ Pendiente',
       fallido: '❌ Fallido',
     }[opStatus];
-    const safeId = r.id.replace(/'/g, "&#39;").replace(/"/g, "&quot;");
+    const safeId = (r.id || 'op_' + Math.random().toString(36).slice(2, 8)).replace(/'/g, "&#39;").replace(/"/g, "&quot;");
 
     return `
       <tr class="op-row" data-op-id="${safeId}">
