@@ -148,6 +148,17 @@ function migrateOpVenta(op) {
 }
 
 // Helpers for sale events (Option B)
+function getOpActivityTime(op) {
+  // Returns ISO-like string for sorting: latest venta (fecha+hora) or op fecha as fallback
+  if (op.ventas && op.ventas.length > 0) {
+    return op.ventas.reduce((latest, v) => {
+      const t = `${v.fecha || ''}T${v.hora || '00:00'}`;
+      return t > latest ? t : latest;
+    }, '0000-00-00T00:00');
+  }
+  return `${op.fecha || '0000-00-00'}T12:00`;
+}
+
 function getOpStatus(op) {
   if (!op.ventas || op.ventas.length === 0) return 'crafteado';
   const hasSold = op.ventas.some(v => v.estado === 'vendido');
@@ -1699,6 +1710,25 @@ function initRegistro() {
     updateRegistro();
   });
 
+  // Event delegation for expand/collapse rows (prevents scroll-to-top from button focus)
+  const tbody = document.getElementById('registroBody');
+  if (tbody && !tbody.dataset.boundToggle) {
+    tbody.addEventListener('click', (e) => {
+      const expandBtn = e.target.closest('.expand-btn');
+      const opRow = e.target.closest('tr.op-row');
+      if (expandBtn && opRow) {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleOpDetail(opRow.dataset.opId);
+      } else if (opRow && !e.target.closest('button') && !e.target.closest('input') && !e.target.closest('select')) {
+        // Click anywhere in the row (except form elements) also toggles
+        e.preventDefault();
+        toggleOpDetail(opRow.dataset.opId);
+      }
+    });
+    tbody.dataset.boundToggle = '1';
+  }
+
   updateRegistro();
 }
 
@@ -1715,8 +1745,8 @@ function updateRegistro() {
   if (filterTipo) items = items.filter(r => r.tipo === filterTipo);
   if (filterEstado) items = items.filter(r => getOpStatus(r) === filterEstado);
 
-  // Newest first
-  items.sort((a,b) => (b.fecha || '').localeCompare(a.fecha || ''));
+  // Newest first by latest activity (fecha + hora of latest venta, or op fecha)
+  items.sort((a, b) => getOpActivityTime(b).localeCompare(getOpActivityTime(a)));
 
   const tbody = document.getElementById('registroBody');
   const empty = document.getElementById('regEmpty');
@@ -1743,8 +1773,8 @@ function updateRegistro() {
     }[opStatus];
 
     return `
-      <tr class="op-row" data-op-id="${r.id}" onclick="toggleOpDetail('${r.id}')">
-        <td><button class="expand-btn">▶</button></td>
+      <tr class="op-row" data-op-id="${r.id}">
+        <td><button class="expand-btn" type="button">▶</button></td>
         <td>${r.fecha || '—'}</td>
         <td><img class="mat-icon-sm" src="${imgUrl(getItemId(r.tipo, r.tier))}" alt=""> ${r.tipo}</td>
         <td>T${r.tier}</td>
@@ -1795,7 +1825,7 @@ function toggleOpDetail(opId) {
   const detailRow = document.getElementById(`detail-${opId}`);
   if (!detailRow) return;
   detailRow.classList.toggle('hidden');
-  // Update expand button
+  // Update expand button arrow
   const opRow = document.querySelector(`tr.op-row[data-op-id="${opId}"] .expand-btn`);
   if (opRow) opRow.textContent = detailRow.classList.contains('hidden') ? '▶' : '▼';
 }
