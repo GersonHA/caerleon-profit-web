@@ -73,6 +73,7 @@ const ROYAL_SIGIL_IMG = {
 };
 
 const STORAGE_KEY = 'caerleon_profit_data_v1';
+const APP_VERSION = 'v5.3-debug-click';
 const BACKUP_KEY = 'caerleon_profit_backup_v1';
 const SYNC_CONFIG_KEY = 'caerleon_sync_config_v1';
 const SYNC_FILENAME = 'caerleon-profit-data.json';
@@ -1710,24 +1711,6 @@ function initRegistro() {
     updateRegistro();
   });
 
-  // Event delegation for expand button only (avoids any row-click weirdness)
-  const tbody = document.getElementById('registroBody');
-  if (tbody && !tbody.dataset.boundToggle) {
-    tbody.addEventListener('click', (e) => {
-      // ONLY respond to clicks on the expand button itself
-      const expandBtn = e.target.closest('.expand-btn');
-      if (!expandBtn) return;
-      e.preventDefault();
-      e.stopPropagation();
-      // Find the parent row that contains this button
-      const opRow = expandBtn.closest('tr.op-row');
-      if (!opRow) return;
-      const opId = opRow.getAttribute('data-op-id');
-      if (opId) toggleOpDetail(opId);
-    });
-    tbody.dataset.boundToggle = '1';
-  }
-
   updateRegistro();
 }
 
@@ -1770,10 +1753,11 @@ function updateRegistro() {
       pendiente: '⏳ Pendiente',
       fallido: '❌ Fallido',
     }[opStatus];
+    const safeId = r.id.replace(/'/g, "&#39;").replace(/"/g, "&quot;");
 
     return `
-      <tr class="op-row" data-op-id="${r.id}">
-        <td><button class="expand-btn" type="button">▶</button></td>
+      <tr class="op-row" data-op-id="${safeId}">
+        <td><button class="expand-btn" type="button" data-toggle-id="${safeId}">▶</button></td>
         <td>${r.fecha || '—'}</td>
         <td><img class="mat-icon-sm" src="${imgUrl(getItemId(r.tipo, r.tier))}" alt=""> ${r.tipo}</td>
         <td>T${r.tier}</td>
@@ -1785,21 +1769,57 @@ function updateRegistro() {
         <td><span class="status-badge status-${opStatus}">${statusBadge}</span></td>
         <td><button class="delete-btn" onclick="event.stopPropagation();deleteRegistro(${realIdx})">🗑️</button></td>
       </tr>
-      <tr class="op-detail-row hidden" id="detail-${r.id}">
+      <tr class="op-detail-row hidden" id="detail-${safeId}">
         <td colspan="11">
           <div class="op-detail-content">
             <div class="ventas-header">
               <strong>📜 Intentos de venta (${ventas.length})</strong>
-              <button class="btn btn-sm btn-primary" onclick="showAddVentaForm('${r.id}')">+ Agregar intento</button>
+              <button class="btn btn-sm btn-primary" data-add-venta="${safeId}">+ Agregar intento</button>
             </div>
-            <div id="ventas-list-${r.id}">
-              ${ventas.length === 0 ? '<p class="hint">Sin intentos de venta aún. Click "+ Agregar intento" cuando intentes vender.</p>' : ventas.map(v => renderVentaRow(r.id, v)).join('')}
+            <div class="ventas-list" data-ventas-list="${safeId}">
+              ${ventas.length === 0 ? '<p class="hint">Sin intentos de venta aún. Click "+ Agregar intento" cuando intentes vender.</p>' : ventas.map(v => renderVentaRow(safeId, v)).join('')}
             </div>
           </div>
         </td>
       </tr>
     `;
   }).join('');
+
+  // Attach direct event listeners to each expand button (avoids event delegation issues)
+  tbody.querySelectorAll('.expand-btn[data-toggle-id]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const opId = btn.getAttribute('data-toggle-id');
+      toggleOpDetail(opId);
+    });
+  });
+  // Attach direct event listeners to "+ Agregar intento" buttons
+  tbody.querySelectorAll('[data-add-venta]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const opId = btn.getAttribute('data-add-venta');
+      showAddVentaForm(opId);
+    });
+  });
+  // Attach listeners to venta edit/delete buttons
+  tbody.querySelectorAll('.venta-actions [data-edit-venta]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const [opId, ventaId] = btn.getAttribute('data-edit-venta').split('|');
+      showEditVentaForm(opId, ventaId);
+    });
+  });
+  tbody.querySelectorAll('.venta-actions [data-delete-venta]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const [opId, ventaId] = btn.getAttribute('data-delete-venta').split('|');
+      deleteVentaConfirm(opId, ventaId);
+    });
+  });
 }
 
 function renderVentaRow(opId, v) {
@@ -1813,20 +1833,26 @@ function renderVentaRow(opId, v) {
         ${v.notas ? `<span class="venta-notas">${v.notas}</span>` : ''}
       </div>
       <div class="venta-actions">
-        <button class="btn-tiny" onclick="showEditVentaForm('${opId}','${v.id}')">✏️</button>
-        <button class="btn-tiny danger" onclick="deleteVentaConfirm('${opId}','${v.id}')">🗑️</button>
+        <button class="btn-tiny" data-edit-venta="${opId}|${v.id}">✏️</button>
+        <button class="btn-tiny danger" data-delete-venta="${opId}|${v.id}">🗑️</button>
       </div>
     </div>
   `;
 }
 
 function toggleOpDetail(opId) {
+  console.log('[toggleOpDetail] called with opId:', opId);
   const detailRow = document.getElementById(`detail-${opId}`);
-  if (!detailRow) return;
+  if (!detailRow) {
+    console.warn('[toggleOpDetail] no detail row found for', opId);
+    return;
+  }
+  const wasHidden = detailRow.classList.contains('hidden');
   detailRow.classList.toggle('hidden');
+  console.log('[toggleOpDetail] toggled', opId, 'wasHidden:', wasHidden);
   // Update expand button arrow
-  const opRow = document.querySelector(`tr.op-row[data-op-id="${opId}"] .expand-btn`);
-  if (opRow) opRow.textContent = detailRow.classList.contains('hidden') ? '▶' : '▼';
+  const btn = document.querySelector(`tr.op-row[data-op-id="${opId}"] .expand-btn`);
+  if (btn) btn.textContent = detailRow.classList.contains('hidden') ? '▶' : '▼';
 }
 
 function showAddVentaForm(opId, existingVentaId = null) {
@@ -2665,6 +2691,9 @@ function initTabs() {
 function initTheme() {
   document.documentElement.dataset.theme = state.theme;
   updateThemeIcon();
+  // Show app version
+  const verEl = document.getElementById('appVersion');
+  if (verEl) verEl.textContent = APP_VERSION;
   document.getElementById('themeToggle').addEventListener('click', () => {
     state.theme = state.theme === 'dark' ? 'light' : 'dark';
     document.documentElement.dataset.theme = state.theme;
