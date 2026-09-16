@@ -73,7 +73,7 @@ const ROYAL_SIGIL_IMG = {
 };
 
 const STORAGE_KEY = 'caerleon_profit_data_v1';
-const APP_VERSION = 'v5.3-debug-click';
+const APP_VERSION = 'v5.6-fix-addventa';
 const BACKUP_KEY = 'caerleon_profit_backup_v1';
 const SYNC_CONFIG_KEY = 'caerleon_sync_config_v1';
 const SYNC_FILENAME = 'caerleon-profit-data.json';
@@ -1741,6 +1741,43 @@ function initRegistro() {
     updateRegistro();
   });
 
+  // Global delegation fallback for data-add-venta (safety net if direct listeners fail)
+  document.addEventListener('click', (e) => {
+    const addBtn = e.target.closest('[data-add-venta]');
+    if (addBtn) {
+      // If event already handled by direct listener (which calls stopPropagation),
+      // it won't reach here. Otherwise, handle it.
+      e.preventDefault();
+      const opId = addBtn.getAttribute('data-add-venta');
+      console.log('[delegation] add-venta fired for:', opId);
+      showAddVentaForm(opId);
+      return;
+    }
+    const editBtn = e.target.closest('[data-edit-venta]');
+    if (editBtn) {
+      e.preventDefault();
+      const [opId, ventaId] = editBtn.getAttribute('data-edit-venta').split('|');
+      console.log('[delegation] edit-venta fired for:', opId, ventaId);
+      showAddVentaForm(opId, ventaId);
+      return;
+    }
+    const delBtn = e.target.closest('[data-delete-venta]');
+    if (delBtn) {
+      e.preventDefault();
+      const [opId, ventaId] = delBtn.getAttribute('data-delete-venta').split('|');
+      console.log('[delegation] delete-venta fired for:', opId, ventaId);
+      deleteVenta(opId, ventaId);
+      return;
+    }
+    const toggleBtn = e.target.closest('.expand-btn[data-toggle-id]');
+    if (toggleBtn) {
+      e.preventDefault();
+      const opId = toggleBtn.getAttribute('data-toggle-id');
+      toggleOpDetail(opId);
+      return;
+    }
+  }); // Bubble phase: fires AFTER direct listeners (which call stopPropagation)
+
   updateRegistro();
 }
 
@@ -1818,7 +1855,7 @@ function updateRegistro() {
           <div class="op-detail-content">
             <div class="ventas-header">
               <strong>📜 Intentos de venta (${ventas.length})</strong>
-              <button class="btn btn-sm btn-primary" data-add-venta="${safeId}">+ Agregar intento</button>
+              <button type="button" class="btn btn-sm btn-primary" data-add-venta="${safeId}">+ Agregar intento</button>
             </div>
             <div class="ventas-list" data-ventas-list="${safeId}">
               ${ventas.length === 0 ? '<p class="hint">Sin intentos de venta aún. Click "+ Agregar intento" cuando intentes vender.</p>' : ventas.map(v => renderVentaRow(safeId, v)).join('')}
@@ -1839,11 +1876,14 @@ function updateRegistro() {
     });
   });
   // Attach direct event listeners to "+ Agregar intento" buttons
-  tbody.querySelectorAll('[data-add-venta]').forEach(btn => {
+  const addVentaBtns = tbody.querySelectorAll('[data-add-venta]');
+  console.log('[updateRegistro] add-venta buttons found:', addVentaBtns.length);
+  addVentaBtns.forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
       const opId = btn.getAttribute('data-add-venta');
+      console.log('[add-venta] click, opId:', opId);
       showAddVentaForm(opId);
     });
   });
@@ -1877,8 +1917,8 @@ function renderVentaRow(opId, v) {
         ${v.notas ? `<span class="venta-notas">${v.notas}</span>` : ''}
       </div>
       <div class="venta-actions">
-        <button class="btn-tiny" data-edit-venta="${opId}|${v.id}">✏️</button>
-        <button class="btn-tiny danger" data-delete-venta="${opId}|${v.id}">🗑️</button>
+        <button type="button" class="btn-tiny" data-edit-venta="${opId}|${v.id}">✏️</button>
+        <button type="button" class="btn-tiny danger" data-delete-venta="${opId}|${v.id}">🗑️</button>
       </div>
     </div>
   `;
