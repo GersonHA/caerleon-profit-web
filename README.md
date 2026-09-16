@@ -1,125 +1,159 @@
-# ⚔️ Caerleon Profit Calculator
+# ⚔️ Caerleon Profit Calculator — versión con login y nube
 
-Calculadora de profits para el **Black Market de Caerleon** (Albion Online). Te ayuda a decidir si vale la pena comprar un item base, encantar con materiales, y vender en el Black Market.
+La misma calculadora de siempre (mismas pantallas, cálculos y animaciones), con:
 
-**Features:**
-- 🧮 Calculadora con todas las fórmulas (materiales, profit, ROI, break-even, costo de oportunidad)
-- 🖼️ **Iconos reales** de los items (arma, cabeza, pecho, etc.) y materiales (runa, alma, reliquia)
-- 💰 Editor de precios de runas, almas y reliquias por tier
-- 📜 Registro histórico con iconos, filtros y búsqueda
-- 📊 Dashboard con KPIs y gráficos (Chart.js)
-- 💾 Persistencia local en localStorage (no necesita servidor)
-- 📤 Exportar/Importar JSON para backup o sync entre dispositivos
-- 🌓 Tema claro/oscuro
-- 📱 Responsive (mobile-first)
+- 🔐 **Login**: solo entras tú.
+- ☁️ **Datos en Supabase** en lugar de GitHub Gist: se guardan solos.
+- ⚡ **Tiempo real**: lo que haces en el PC aparece en el celular al instante.
+- 💾 Copia local en el navegador, como antes.
+
+La página sigue alojada en **GitHub Pages** (gratis). Supabase solo guarda los
+datos y controla el login.
+
+```
+Navegador (GitHub Pages) ──login + datos──> Supabase (Postgres + Auth + Realtime)
+```
 
 ---
 
-## 🚀 Cómo publicar en GitHub Pages
+## Puesta en marcha (una sola vez)
 
-### 1. Crea un repo en GitHub
+### 1. Crear el proyecto en Supabase
 
-Ve a https://github.com/new y crea un repo (ej: `caerleon-profit`).
+1. Entra a [supabase.com](https://supabase.com) → **Start your project** → inicia sesión con GitHub.
+2. **New project**: nombre (ej. `caerleon-profit`), una contraseña de base de datos (guárdala), región cercana, plan **Free**.
+3. Espera a que termine de crearse.
 
-### 2. Sube los archivos
+### 2. Crear las tablas
 
-Tienes 3 archivos: `index.html`, `styles.css`, `app.js`. Más este README.
+1. Menú izquierdo → **SQL Editor** → **New query**.
+2. Pega **todo** el contenido de [`supabase/migrations/20260916000000_schema.sql`](supabase/migrations/20260916000000_schema.sql).
+3. **Run**. Debe terminar sin errores.
 
-**Opción A — Web interface:**
-1. Click en "uploading an existing file"
-2. Arrastra los 4 archivos
-3. Commit
+### 3. Crear tu usuario y cerrar el registro
 
-**Opción B — Git CLI:**
+1. **Authentication → Users → Add user → Create new user**: tu email y una contraseña. Marca **Auto Confirm User**.
+2. **Authentication → Sign In / Providers**: desactiva **Allow new users to sign up**.
+
+> ⚠️ Desactiva solo **"Allow new users to sign up"** (el registro general).
+> **No** apagues el proveedor **Email**: eso también bloquea el login.
+> Se verificó en las pruebas.
+
+### 4. Conectar la página
+
+1. **Project Settings → API**: copia la **Project URL** y la clave **anon** (o **publishable**).
+2. Pégalas en [`config.js`](config.js), en `CAERLEON_PROD`.
+
+Esas dos claves son públicas por diseño. **Nunca** pongas la `service_role` / `secret`.
+
+### 5. Publicar en GitHub Pages
+
+Sube estos archivos al repositorio de GitHub Pages:
+
+```
+index.html  app.js  styles.css  config.js  chart.umd.min.js
+js/  vendor/  img/
+```
+
+(`tests/`, `supabase/` y `package.json` no hacen falta para que funcione.)
+
+### 6. Pasar tus datos
+
+Tienes dos formas:
+
+- **Automática**: si abres la nueva versión en el mismo navegador y la misma
+  dirección donde usabas la anterior, al iniciar sesión te pregunta
+  *"Encontré N operaciones guardadas en este navegador… ¿Subirlas a tu cuenta?"*.
+- **Con el JSON exportado**: **Configuración → Opciones avanzadas → Importar JSON**
+  y eliges tu archivo (ej. `caerleon-profit-2026-09-16.json`).
+
+Al importar, cada operación recibe un identificador nuevo (el viejo se conserva
+como `legacyId`) y las operaciones de Sellos Reales que no tenían estado se
+clasifican.
+
+> ℹ️ En el plan gratuito, Supabase pausa los proyectos que pasan un tiempo sin
+> actividad (hoy, una semana). Si pasa, se reactiva desde el panel de Supabase.
+
+---
+
+## Qué cambió respecto a la versión anterior
+
+| | Antes | Ahora |
+|---|---|---|
+| Datos | `localStorage` + GitHub Gist (token personal) | Supabase, por usuario |
+| Sincronización | cada 5 min, con límites de GitHub | tiempo real |
+| Acceso | cualquiera con la URL veía una app vacía | login obligatorio |
+| Operaciones de la Calculadora | se guardaban **sin id** → no se les podían agregar ventas | UUID siempre |
+| Operaciones de Sellos Reales | quedaban **sin estado** | se clasifican |
+| "Nuevo intento de venta" | los campos **Comprador** y **Estado** no se veían (CSS) → toda venta quedaba *Vendido / Mercado Negro* | visibles |
+| "Borrar todo" | perdía la preferencia Premium | la conserva |
+
+Operaciones nuevas: nacen como **⚪ Crafteado** hasta que les registras un
+intento de venta. (En la versión anterior, al recargar la página se les creaba
+sola una venta *"Vendido"* con el precio de venta; eso ahora solo pasa al
+importar datos viejos que no tienen ventas.)
+
+**El motor de cálculo no cambió**: un test compara, carácter por carácter, cada
+función de cálculo contra el `app.js` original.
+
+---
+
+## Estructura
+
+```
+index.html          pantallas de login/carga + la app
+app.js              la app original, con el guardado apuntando a la nube
+styles.css          estilos originales + login y estado de la nube (al final)
+config.js           URL y clave pública de Supabase
+js/cloud-core.js    traducción app <-> tablas, guardado por diferencias, tiempo real
+js/cloud-ui.js      login, carga inicial, guardado automático, avisos
+vendor/             supabase-js 2.116.0 (local, sin CDN)
+supabase/           esquema SQL y configuración del Supabase local
+tests/              pruebas (ver abajo)
+```
+
+### Base de datos
+
+| Tabla | Contenido |
+|---|---|
+| `profiles` | Premium y tema |
+| `material_prices` | runa / alma / reliquia por tier |
+| `sigil_prices` | Sello Real por tier |
+| `operations` | el registro |
+| `sales` | intentos de venta de cada operación |
+
+Todas con **RLS**: la base de datos solo entrega y acepta filas del usuario que
+inició sesión. Los importes son `numeric` para que vuelvan con exactamente los
+mismos dígitos que envió el navegador.
+
+---
+
+## Pruebas (QA)
+
+Requieren **Docker Desktop** y **Node.js**. Corren contra un Supabase **local**,
+nunca contra tu proyecto real.
+
+> Las pruebas viven en la carpeta de trabajo `caerleon-profit-supabase/`
+> (no se publican en GitHub Pages). La versión anterior usada como referencia
+> está copiada en `tests/original/` (commit `f5d5091`).
+
 ```bash
-cd caerleon-profit
-git init
-git add index.html styles.css app.js README.md
-git commit -m "Initial commit"
-git branch -M main
-git remote add origin https://github.com/TU-USUARIO/caerleon-profit.git
-git push -u origin main
+npm install
+npx supabase start        # Supabase local en Docker (la primera vez descarga imágenes)
+npm test                  # todo: unitarias + integración + navegador
 ```
 
-### 3. Activa GitHub Pages
+| Suite | Qué verifica |
+|---|---|
+| `test:unit` (20) | el motor de cálculo es idéntico al original; solo cambió lo previsto; tus 43 operaciones y las 500 de muestra ida y vuelta sin perder nada; cálculo de diferencias |
+| `test:integration` (14) | registro cerrado; login; alta con precios por defecto; subir/editar/borrar exacto; >1000 filas; **un usuario no ve ni toca datos de otro**; sin sesión no se ve nada; tiempo real entre dispositivos |
+| `test:e2e` (5) | en Edge: login, importar tu JSON, calculadora, sellos, ventas, precios, tema, recarga, borrar, cerrar sesión, **PC ↔ celular en vivo**, subida de datos de la versión anterior |
 
-1. Repo → Settings → Pages
-2. Source: "Deploy from a branch"
-3. Branch: `main` / `(root)`
-4. Save
+Probar la página a mano con el Supabase local:
 
-En 1-2 minutos tu sitio estará en:
+```bash
+npm run serve             # http://127.0.0.1:5500/?dev=1
 ```
-https://TU-USUARIO.github.io/caerleon-profit/
-```
 
-¡Listo! Ábrelo desde cualquier dispositivo.
-
----
-
-## 📱 Usar desde el celular
-
-1. Abre el URL en Safari/Chrome del celular
-2. (Opcional) iOS: Compartir → "Añadir a pantalla de inicio" para usarlo como app
-
----
-
-## 🔄 Sincronizar entre dispositivos
-
-Como cada navegador tiene su propio localStorage, para pasar tus datos:
-
-**PC → Celular:**
-1. En la PC, ve a "Configuración" → "Exportar JSON"
-2. Te descarga un archivo `caerleon-profit-YYYY-MM-DD.json`
-3. Envíatelo por WhatsApp/email/cloud al celular
-4. En el celular, abre la web → "Configuración" → "Importar JSON"
-
-**Automático (alternativa avanzada):**
-- Crea un GitHub Gist privado
-- Usa una herramienta como [gistpad](https://gistpad.app/) para sync automático
-- (Requiere token de GitHub)
-
----
-
-## 🎮 Cómo usar
-
-### Calculadora
-1. **Configuración** — Premium ON = 4% tax, OFF = 8% tax
-2. **Datos** — Tipo, tier, encantamientos, calidad, cantidad, precios
-3. **Materiales** — Se calcula automáticamente lo que necesitas
-4. **Resultados** — Profit, ROI, break-even, todo en vivo
-5. **Guardar** — Click en "💾 Guardar operación en Registro"
-
-### Precios
-Edita los precios a los que TÚ compraste cada material. Se usan en todas las operaciones.
-
-### Registro
-Ve todas tus operaciones pasadas. Filtra por tipo, estado, o busca texto.
-
-### Dashboard
-KPIs y gráficos para analizar tu performance en el tiempo.
-
----
-
-## 📐 Reglas del juego (verificadas)
-
-- **Tax Black Market**: 4% (Premium) / 8% (sin Premium)
-- **Materiales por paso**: 2H=384, 1H=288, Pecho/Bolsa=192, Cabeza/Pies/Capa/Secundaria=96
-- **Regla de encantamiento**: .0→.1 runas, .1→.2 almas, .2→.3 reliquias
-- **Max encantamiento via upgrade**: .3 (para .4 necesitas crafting)
-- **Item Power**: T4.0 = 700 IP, +100 por tier, +100 por encantamiento
-
----
-
-## 🛠️ Tech
-
-- HTML5 + CSS3 + Vanilla JS (sin frameworks)
-- [Chart.js](https://www.chartjs.org/) v4.4.0 (incluido local, sin CDN)
-- localStorage para persistencia
-- 100% client-side, sin servidor
-
----
-
-## 📝 Licencia
-
-MIT — úsalo, modifícalo, comparte. Hecho para la comunidad de Albion Online.
+Con `?dev=1` la página usa el Supabase local (usuarios de prueba creados en
+`http://127.0.0.1:54323`, el panel local). `?dev=0` vuelve a la configuración real.

@@ -6,14 +6,66 @@
 <title>Calculadora de Profit de Caerleon</title>
 <link rel="stylesheet" href="styles.css">
 <script src="chart.umd.min.js"></script>
+<script src="vendor/supabase.umd.js"></script>
+<script src="config.js?v=6.0"></script>
+<script src="js/cloud-core.js?v=6.0"></script>
+<script src="js/cloud-ui.js?v=6.0"></script>
 </head>
-<body>
+<body data-screen="loading">
+
+<!-- ========== ARRANQUE: carga / configuración / login / error ========== -->
+<div class="boot-screen" id="bootScreen">
+  <div class="boot-card">
+    <div class="boot-brand">⚔️ <span>Caerleon Profit</span></div>
+
+    <!-- Cargando -->
+    <div class="boot-panel" data-panel="loading">
+      <div class="boot-spinner" aria-hidden="true"></div>
+      <p class="hint" id="bootLoadingMsg">Cargando tus datos…</p>
+    </div>
+
+    <!-- Falta configurar Supabase -->
+    <div class="boot-panel" data-panel="setup">
+      <h2>Falta conectar Supabase</h2>
+      <p class="hint">
+        Abre <code>config.js</code> y pega la <strong>Project URL</strong> y la clave
+        <strong>anon / publishable</strong> de tu proyecto
+        (Supabase → Project Settings → API).
+      </p>
+    </div>
+
+    <!-- Login -->
+    <div class="boot-panel" data-panel="login">
+      <form id="loginForm" class="login-form" autocomplete="on">
+        <h2>Iniciar sesión</h2>
+        <label class="label" for="loginEmail">Email</label>
+        <input class="input" type="email" id="loginEmail" autocomplete="username" required>
+        <label class="label" for="loginPassword">Contraseña</label>
+        <input class="input" type="password" id="loginPassword" autocomplete="current-password" required>
+        <p class="login-error" id="loginError" role="alert"></p>
+        <button type="submit" class="btn btn-primary btn-large" id="loginSubmit">Entrar</button>
+      </form>
+    </div>
+
+    <!-- Error de carga -->
+    <div class="boot-panel" data-panel="error">
+      <h2>Algo salió mal</h2>
+      <p class="hint" id="bootErrorMsg"></p>
+      <button type="button" class="btn btn-primary" id="bootRetry">Reintentar</button>
+    </div>
+  </div>
+</div>
+
 <div class="app">
   <!-- ========== HEADER ========== -->
   <header class="header">
     <div class="header-inner">
       <h1>⚔️ Caerleon Profit Calculator <small id="appVersion" style="font-size:0.5em;color:var(--accent);font-weight:400;"></small></h1>
-      <button id="themeToggle" class="icon-btn" title="Cambiar tema">🌓</button>
+      <div class="header-actions">
+        <span class="sync-status idle" data-cloud-status title="Estado de la nube"><span class="dot"></span><span class="txt">Conectando…</span></span>
+        <button id="themeToggle" class="icon-btn" title="Cambiar tema">🌓</button>
+        <button class="icon-btn" data-action="logout" title="Cerrar sesión">🚪</button>
+      </div>
     </div>
     <nav class="tabs">
       <button class="tab active" data-tab="calc">Calculadora</button>
@@ -475,54 +527,26 @@
 
     <!-- ========== TAB: SETTINGS ========== -->
     <section id="tab-settings" class="tab-content">
-      <!-- ===== SYNC CARD (minimalist) ===== -->
+      <!-- ===== CUENTA Y NUBE ===== -->
       <div class="card">
-        <div class="card-header">☁️ Sincronización</div>
+        <div class="card-header">☁️ Cuenta y nube</div>
         <div class="card-body">
-          <!-- Connected view: just status pill + auto-sync indicator -->
-          <div id="syncConnectedView" class="hidden">
-            <div class="sync-info">
-              <div class="sync-status-row">
-                <span class="sync-pulse-dot"></span>
-                <span><strong>Auto-sync activo</strong></span>
-              </div>
-              <p class="hint" id="syncConnectedInfo" style="margin: 0.5rem 0 0 0;">
-                Tus datos se guardan automáticamente en este dispositivo y en la nube.
-              </p>
+          <div class="sync-info">
+            <div class="sync-status-row">
+              <span class="sync-pulse-dot"></span>
+              <span>Conectado como <strong data-user-email>—</strong></span>
             </div>
-          </div>
-
-          <!-- Not connected view: token input only -->
-          <div id="syncSetupView">
-            <p class="hint" style="margin-top: 0;">
-              Conecta una vez con GitHub para que tu data se sincronice automáticamente entre dispositivos.
+            <p class="hint" style="margin: 0.5rem 0 0 0;">
+              Todo se guarda solo en tu cuenta de Supabase y aparece al instante en tus otros dispositivos.
             </p>
-            <details class="gist-help" style="margin-top: 0.75rem;">
-              <summary>📖 ¿Cómo conecto? (click aquí)</summary>
-              <ol class="hint" style="margin-top: 0.5rem; padding-left: 1.2rem; line-height: 1.7;">
-                <li>Ve a <a href="https://github.com/settings/tokens/new?scopes=gist&description=Caerleon%20Profit%20Calculator" target="_blank" rel="noopener">github.com/settings/tokens/new</a></li>
-                <li>Marca solo el scope <code>gist</code> (ya viene marcado)</li>
-                <li>Click <strong>Generate token</strong> y cópialo (empieza con <code>ghp_...</code>)</li>
-                <li>Pégalo abajo. Solo lo haces una vez.</li>
-              </ol>
-            </details>
-            <div class="form-grid" style="margin-top: 1rem;">
-              <div>
-                <label for="ghToken" class="label">GitHub Token</label>
-                <input type="password" id="ghToken" class="input" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" autocomplete="off">
-              </div>
-              <div>
-                <label for="ghGistId" class="label">Gist ID (opcional)</label>
-                <input type="text" id="ghGistId" class="input" placeholder="se crea automáticamente">
-              </div>
-            </div>
-            <div class="row" style="margin-top: 1rem;">
-              <button id="btnSyncSave" class="btn btn-primary">🔗 Conectar</button>
+            <div style="margin-top: 0.5rem;">
+              <span class="sync-status idle" data-cloud-status><span class="dot"></span><span class="txt">Conectando…</span></span>
             </div>
           </div>
-
-          <!-- Hidden status indicator (used internally) -->
-          <div id="syncStatus" class="hidden"></div>
+          <div class="row gap-2 wrap" style="margin-top: 1rem;">
+            <button id="btnCloudReload" class="btn btn-secondary btn-sm">🔄 Recargar desde la nube</button>
+            <button class="btn btn-secondary btn-sm" data-action="logout">🚪 Cerrar sesión</button>
+          </div>
         </div>
       </div>
 
@@ -531,7 +555,7 @@
         <div class="card-header">💾 Respaldo Local</div>
         <div class="card-body">
           <p class="hint" style="margin: 0;">
-            Tus datos se guardan automáticamente en este navegador.
+            Además de la nube, se guarda una copia en este navegador.
           </p>
           <div id="storageInfo" class="hint" style="margin-top: 0.5rem;"></div>
           <div id="backupRestoreArea" class="hidden" style="margin-top: 0.75rem;">
@@ -548,11 +572,7 @@
             <button id="btnExport" class="btn btn-secondary btn-sm">📤 Exportar JSON</button>
             <button id="btnImport" class="btn btn-secondary btn-sm">📥 Importar JSON</button>
             <input type="file" id="fileImport" accept=".json" style="display:none">
-            <button id="btnSyncTest" class="btn btn-secondary btn-sm">🔌 Probar conexión</button>
-            <button id="btnSyncNow" class="btn btn-secondary btn-sm">⬆️ Forzar push</button>
-            <button id="btnSyncPull" class="btn btn-secondary btn-sm">⬇️ Forzar pull</button>
-            <button id="btnSyncDisconnect" class="btn btn-danger btn-sm">🔌 Desconectar nube</button>
-            <button id="btnClear" class="btn btn-danger btn-sm">🗑️ Borrar todo local</button>
+            <button id="btnClear" class="btn btn-danger btn-sm">🗑️ Borrar todo</button>
           </div>
         </div>
       </details>
@@ -572,6 +592,6 @@
 
 <div id="toast" class="toast"></div>
 
-<script src="app.js?v=5.3"></script>
+<script src="app.js?v=6.0"></script>
 </body>
 </html>

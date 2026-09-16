@@ -73,17 +73,8 @@ const ROYAL_SIGIL_IMG = {
 };
 
 const STORAGE_KEY = 'caerleon_profit_data_v1';
-const APP_VERSION = 'v5.6-fix-addventa';
+const APP_VERSION = 'v6.0-supabase';
 const BACKUP_KEY = 'caerleon_profit_backup_v1';
-const SYNC_CONFIG_KEY = 'caerleon_sync_config_v1';
-const SYNC_FILENAME = 'caerleon-profit-data.json';
-
-// GitHub Gist sync state
-let syncConfig = loadSyncConfig();
-let syncStatus = { state: 'idle', msg: 'Sin sincronizar', lastSync: null, remoteUpdated: null };
-let syncTimer = null;
-let syncInterval = null;
-let syncInFlight = false;
 
 // =====================================================
 // STATE (carga desde localStorage o inicializa)
@@ -135,7 +126,7 @@ function migrateOpVenta(op) {
     // Auto-create one "vendido" venta from existing pVenta if applicable
     if (op.pVenta && op.pVenta > 0) {
       op.ventas.push({
-        id: 'v_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        id: CaerleonCloud.newId(),
         fecha: op.fecha || localDateStr(),
         hora: '12:00',
         precio: op.pVenta,
@@ -184,7 +175,7 @@ function addVenta(opId, ventaData) {
   if (!op) return false;
   if (!op.ventas) op.ventas = [];
   op.ventas.push({
-    id: 'v_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+    id: CaerleonCloud.newId(),
     fecha: ventaData.fecha || localDateStr(),
     hora: ventaData.hora || new Date().toTimeString().slice(0, 5),
     precio: ventaData.precio || 0,
@@ -248,10 +239,8 @@ function saveState() {
         }));
       } catch (e) { /* backup is best-effort */ }
     }
-    // Schedule cloud sync if configured
-    if (syncConfig && syncConfig.token && syncConfig.gistId) {
-      scheduleSyncPush();
-    }
+    // Guardar en Supabase (con una pequeña espera para agrupar cambios)
+    if (window.CloudSync) CloudSync.schedulePush();
   } catch (e) {
     console.error('Error guardando state:', e);
     showToast('Error guardando datos', 'error');
@@ -268,7 +257,7 @@ function restoreFromBackup() {
     if (data.registro.length === 0) return false;
     state.precios = data.precios;
     if (data.sellos) state.sellos = data.sellos;
-    state.registro = data.registro.map(op => migrateOpVenta(op));
+    state.registro = normalizeForCloud(data.registro.map(op => migrateOpVenta(op)));
     if (data.premium !== undefined) state.premium = data.premium;
     saveState();
     initPrecios();
@@ -284,664 +273,34 @@ function restoreFromBackup() {
 }
 
 // =====================================================
-// GITHUB GIST SYNC
+// NUBE (Supabase) — ver js/cloud-core.js y js/cloud-ui.js
 // =====================================================
 
-function loadSyncConfig() {
-  try {
-    const raw = localStorage.getItem(SYNC_CONFIG_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch (e) {
-    console.error('Error cargando sync config:', e);
-  }
-  return null;
+// Deja el registro listo para la nube: UUID en operaciones y ventas, y
+// estado calculado para las operaciones que no lo tenían (las Reales).
+function normalizeForCloud(registro) {
+  return CaerleonCloud.normalizeRegistro(registro, {
+    classify: calcEstado,
+    today: localDateStr(),
+  }).registro;
 }
 
-function saveSyncConfig(cfg) {
-  try {
-    localStorage.setItem(SYNC_CONFIG_KEY, JSON.stringify(cfg));
-    syncConfig = cfg;
-  } catch (e) {
-    console.error('Error guardando sync config:', e);
-  }
-}
-
-function clearSyncConfig() {
-  localStorage.removeItem(SYNC_CONFIG_KEY);
-  syncConfig = null;
-}
-
-function setSyncStatus(state, msg) {
-  syncStatus.state = state;
-  syncStatus.msg = msg;
-  updateSyncUI();
-}
-
-function gistApi(path, method, body, token) {
-  const headers = {
-    'Accept': 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-  };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  if (body) headers['Content-Type'] = 'application/json';
-  return fetch(`https://api.github.com${path}`, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  }).then(async res => {
-    if (res.status === 403 || res.status === 429) {
-      const remaining = res.headers.get('x-ratelimit-remaining');
-      const reset = res.headers.get('x-ratelimit-reset');
-      const resetDate = reset ? new Date(parseInt(reset) * 1000).toLocaleTimeString() : '?';
-      const err = new Error(`Rate limit alcanzado. Reset a las ${resetDate}`);
-      err.isRateLimit = true;
-      err.remaining = remaining;
-      err.reset = reset;
-      throw err;
-    }
-    return res;
-  });
-}
-
-async function testGistConnection(token, gistId) {
-  if (!token) throw new Error('Falta el token');
-  // Verify token by getting user
-  const userRes = await gistApi('/user', 'GET', null, token);
-  if (!userRes.ok) {
-    if (userRes.status === 401) throw new Error('Token inválido o expirado');
-    throw new Error(`Error de autenticación (${userRes.status})`);
-  }
-  const user = await userRes.json();
-  // If gistId provided, verify access
-  if (gistId) {
-    const gistRes = await gistApi(`/gists/${gistId}`, 'GET', null, token);
-    if (!gistRes.ok) {
-      if (gistRes.status === 404) throw new Error('Gist no encontrado o sin acceso');
-      throw new Error(`Error accediendo al gist (${gistRes.status})`);
-    }
-    return { user: user.login, gistId };
-  }
-  return { user: user.login, gistId: null };
-}
-
-async function createGist(token) {
-  const body = {
-    description: 'Caerleon Profit Calculator — datos sincronizados',
-    public: false,
-    files: {
-      [SYNC_FILENAME]: {
-        content: JSON.stringify({
-          version: 1,
-          created: new Date().toISOString(),
-          precios: state.precios,
-          registro: state.registro,
-            sellos: state.sellos,
-          premium: state.premium,
-        }, null, 2),
-      },
-    },
-  };
-  const res = await gistApi('/gists', 'POST', body, token);
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.message || `Error creando gist (${res.status})`);
-  }
-  const data = await res.json();
-  return data.id;
-}
-
-async function pushToGist() {
-  if (!syncConfig || !syncConfig.token || !syncConfig.gistId) return false;
-
-  // SAFETY: ALWAYS check remote before pushing to avoid overwriting more data
-  if (state.registro.length === 0) {
-    // Local empty → pull if remote has anything
-    try {
-      const checkRes = await gistApi(`/gists/${syncConfig.gistId}?_=${Date.now()}`, 'GET', null, syncConfig.token);
-      if (checkRes.ok) {
-        const remoteData = await checkRes.json();
-        const remoteFile = remoteData.files[SYNC_FILENAME] || Object.values(remoteData.files)[0];
-        if (remoteFile) {
-          const remote = JSON.parse(remoteFile.content);
-          const remoteCount = remote.registro?.length || 0;
-          if (remoteCount > 0) {
-            console.warn('[Push Safety] Local empty, remote has', remoteCount, 'ops — switching to pull');
-            setSyncStatus('warn', `⚠️ Local vacío · Trayendo ${remoteCount} ops de la nube…`);
-            return await pullFromGist();
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('[Push Safety] Pre-check failed, proceeding with push:', e.message);
-    }
-  } else {
-    // Local has data → CRITICAL: don't push if remote has MORE ops
-    try {
-      const checkRes = await gistApi(`/gists/${syncConfig.gistId}?_=${Date.now()}`, 'GET', null, syncConfig.token);
-      if (checkRes.ok) {
-        const remoteData = await checkRes.json();
-        const remoteFile = remoteData.files[SYNC_FILENAME] || Object.values(remoteData.files)[0];
-        if (remoteFile) {
-          const remote = JSON.parse(remoteFile.content);
-          const remoteCount = remote.registro?.length || 0;
-          const localCount = state.registro.length;
-          if (remoteCount > localCount) {
-            console.warn(`[Push Safety] Local ${localCount} < Remote ${remoteCount} — pulling instead`);
-            setSyncStatus('warn', `⚠️ Nube tiene ${remoteCount} ops (más que local) · mergeando…`);
-            const merge = mergeRegistros(state.registro, remote.registro);
-            state.registro = merge.merged.map(op => migrateOpVenta(op));
-            state.precios = mergePrecios(state.precios, remote.precios);
-            if (remote.sellos) state.sellos = { ...state.sellos, ...remote.sellos };
-            if (remote._updated) state._updated = remote._updated;
-            saveState();
-            initPrecios();
-            updateCalculadora();
-            updateRegistro();
-            updateDashboard();
-            updateStorageInfo();
-            syncStatus.lastSync = new Date();
-            setSyncStatus('ok', `☁️ Merge · ${merge.keptUniqueLocal}+${merge.addedFromRemote} = ${merge.merged.length}`);
-            showToast(`☁️ ${merge.addedFromRemote} ops nuevas (total: ${merge.merged.length})`, 'success');
-            return true;
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('[Push Safety] Pre-check failed, proceeding with push:', e.message);
-    }
-  }
-
-  setSyncStatus('syncing', 'Subiendo a la nube…');
-
-  const expectedContent = JSON.stringify({
-    version: 1,
-    updated: new Date().toISOString(),
-    precios: state.precios,
-    registro: state.registro,
-    sellos: state.sellos,
-    premium: state.premium,
-  }, null, 2);
-
-  const payload = {
-    description: 'Caerleon Profit Calculator — datos sincronizados',
-    files: {
-      [SYNC_FILENAME]: {
-        content: expectedContent,
-      },
-    },
-  };
-
-  // Retry up to 2 times
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      const res = await gistApi(`/gists/${syncConfig.gistId}?_t=${Date.now()}`, 'PATCH', payload, syncConfig.token);
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || `Error subiendo (${res.status})`);
-      }
-
-      // VERIFY the push actually went through (read back and compare)
-      const verifyRes = await gistApi(`/gists/${syncConfig.gistId}?_t=${Date.now()}&v=${Math.random()}`, 'GET', null, syncConfig.token);
-      if (verifyRes.ok) {
-        const verifyData = await verifyRes.json();
-        const verifyFile = verifyData.files[SYNC_FILENAME];
-        const verifyContent = verifyFile?.content;
-        if (verifyContent === expectedContent) {
-          // Success! Verification passed
-          if (verifyData.updated_at) syncStatus.remoteUpdated = verifyData.updated_at;
-          syncStatus.lastSync = new Date();
-          setSyncStatus('ok', `✅ Sincronizado ${syncStatus.lastSync.toLocaleTimeString()} (${state.registro.length} ops)`);
-          showToast(`☁️ Push verificado · ${state.registro.length} ops en la nube`, 'success');
-          return true;
-        } else {
-          // Verification failed — content mismatch
-          console.warn(`[Push] Attempt ${attempt}: content mismatch after PATCH. Expected length ${expectedContent.length}, got ${verifyContent?.length}`);
-          if (attempt < 2) {
-            await new Promise(r => setTimeout(r, 500)); // wait 500ms before retry
-            continue;
-          }
-          throw new Error('Verificación falló: el contenido no coincide después de 2 intentos. Intenta manualmente.');
-        }
-      } else {
-        // Verification GET failed, but PATCH succeeded — assume it worked
-        console.warn('[Push] Verification GET failed, trusting PATCH response');
-        syncStatus.lastSync = new Date();
-        setSyncStatus('ok', `✅ Sincronizado (sin verificación)`);
-        showToast(`☁️ Push completo · ${state.registro.length} ops`, 'success');
-        return true;
-      }
-    } catch (e) {
-      console.error(`[Push] Attempt ${attempt} failed:`, e.message);
-      if (e.isRateLimit) {
-        setSyncStatus('error', `⏳ Rate limit · reset ${e.reset ? new Date(parseInt(e.reset) * 1000).toLocaleTimeString() : '?'}`);
-        showToast(`⏳ Rate limit de GitHub · espera hasta el reset`, 'warn');
-        return false;
-      }
-      if (attempt === 2) {
-        setSyncStatus('error', `❌ ${e.message}`);
-        showToast(`Error push: ${e.message}`, 'error');
-        return false;
-      }
-      await new Promise(r => setTimeout(r, 1000)); // wait 1s before retry
-    }
-  }
-  return false;
-}
-
-async function pullFromGist() {
-  if (!syncConfig || !syncConfig.token || !syncConfig.gistId) {
-    showToast('Configura la sincronización primero', 'warn');
-    return false;
-  }
-  setSyncStatus('syncing', 'Descargando de la nube…');
-  try {
-    // Cache-bust to avoid stale API responses
-    const res = await gistApi(`/gists/${syncConfig.gistId}?_=${Date.now()}`, 'GET', null, syncConfig.token);
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.message || `Error descargando (${res.status})`);
-    }
-    const data = await res.json();
-    const file = data.files[SYNC_FILENAME] || Object.values(data.files)[0];
-    if (!file) throw new Error('Gist sin archivo de datos');
-    const remote = JSON.parse(file.content);
-    if (data.updated_at) syncStatus.remoteUpdated = data.updated_at;
-    console.log('[Sync Pull] Recibido:', {
-      hasPrecios: !!remote.precios,
-      hasRegistro: !!remote.registro,
-      registroCount: remote.registro?.length || 0,
-      updated: remote.updated,
-    });
-    if (!remote.precios || !remote.registro) throw new Error('Formato de datos inválido');
-
-    const remoteCount = remote.registro.length;
-    const localCount = state.registro.length;
-    const updatedRemote = remote.updated ? ` (subido ${new Date(remote.updated).toLocaleString()})` : '';
-    const msg = `La nube tiene ${remoteCount} operaciones${updatedRemote}, tú tienes ${localCount} aquí.`;
-    let apply = false;
-    if (remoteCount === 0 && localCount === 0) {
-      apply = true; // both empty
-    } else if (remoteCount === 0) {
-      apply = confirm(`${msg}\n\nLa nube está vacía. ¿Reemplazar con datos vacíos?\n(Cancela para conservar tus datos locales)`);
-    } else if (localCount === 0) {
-      apply = true; // local empty, take remote
-    } else {
-      apply = confirm(`${msg}\n\n¿Reemplazar tus datos locales con los de la nube?\n(Cancela para conservar lo que tienes aquí)`);
-    }
-    if (!apply) {
-      setSyncStatus('idle', 'Sincronización cancelada — datos locales intactos');
-      return false;
-    }
-
-    // SMART MERGE for manual pull too (in case local has unique items)
-    const merge = mergeRegistros(state.registro, remote.registro);
-    state.registro = merge.merged.map(op => migrateOpVenta(op));
-    state.precios = mergePrecios(state.precios, remote.precios);
-    if (remote.sellos) state.sellos = { ...state.sellos, ...remote.sellos };
-    if (remote.premium !== undefined) state.premium = remote.premium;
-    saveState();
-    initPrecios();
-    updateCalculadora();
-    updateRegistro();
-    updateDashboard();
-    updateStorageInfo();
-
-    syncStatus.lastSync = new Date();
-    if (merge.addedFromRemote > 0 && merge.keptUniqueLocal > 0) {
-      setSyncStatus('ok', `⬇️ Merge · ${merge.keptUniqueLocal} locales + ${merge.addedFromRemote} remotas = ${merge.merged.length}`);
-      showToast(`☁️ Sincronización: ${merge.merged.length} operaciones totales`, 'success');
-    } else {
-      setSyncStatus('ok', `⬇️ ${remoteCount} operaciones traídas${updatedRemote}`);
-      showToast(`☁️ ${remoteCount} operaciones sincronizadas`, 'success');
-    }
-    // Push merged state up so gist has all items
-    scheduleSyncPush();
-    return true;
-  } catch (e) {
-    console.error('Sync pull error:', e);
-    setSyncStatus('error', `❌ ${e.message}`);
-    showToast(`Error: ${e.message}`, 'error');
-    return false;
-  }
-}
-
-function scheduleSyncPush() {
-  if (syncTimer) clearTimeout(syncTimer);
-  setSyncStatus('warn', '⏱ Sync programado en 8s…');
-  // Longer debounce to reduce API calls (was 3s, now 8s)
-  syncTimer = setTimeout(async () => {
-    syncTimer = null;
-    // SAFETY: if local has 0 ops, do a quick pull-check before pushing
-    if (state.registro.length === 0) {
-      try {
-        const checkRes = await gistApi(`/gists/${syncConfig.gistId}?_=${Date.now()}`, 'GET', null, syncConfig.token);
-        if (checkRes.ok) {
-          const remoteData = await checkRes.json();
-          const remoteFile = remoteData.files[SYNC_FILENAME] || Object.values(remoteData.files)[0];
-          if (remoteFile) {
-            const remote = JSON.parse(remoteFile.content);
-            const remoteCount = remote.registro?.length || 0;
-            if (remoteCount > 0) {
-              console.warn('[Sync Safety] Local empty but remote has', remoteCount, 'ops — pulling instead of pushing');
-              setSyncStatus('warn', `⚠️ Local vacío · trayendo ${remoteCount} ops de la nube…`);
-              await pullFromGist();
-              return;
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('[Sync Safety] Pre-check failed:', e.message);
-      }
-    }
-    pushToGist();
-  }, 3000);
-}
-
-// =====================================================
-// SMART MERGE (combine local + remote to avoid data loss)
-// =====================================================
-
-function mergeRegistros(localReg, remoteReg) {
-  // Build a Set of existing IDs to dedupe
-  const localIds = new Set(localReg.map(r => r.id));
-  // Items unique to remote (not in local) → add them
-  const newFromRemote = remoteReg.filter(r => !localIds.has(r.id));
-  // Combine: keep ALL local items + add new from remote (never lose local data)
-  return {
-    merged: [...localReg, ...newFromRemote],
-    addedFromRemote: newFromRemote.length,
-    keptUniqueLocal: localReg.length,
-  };
-}
-
-function mergePrecios(localP, remoteP) {
-  // For each tier+material, use the most recent non-zero value
-  const result = structuredClone(localP);
-  for (const tier of Object.keys(remoteP)) {
-    if (!result[tier]) result[tier] = { runa: 0, alma: 0, relic: 0 };
-    for (const mat of ['runa', 'alma', 'relic']) {
-      const rv = remoteP[tier]?.[mat] || 0;
-      const lv = result[tier][mat] || 0;
-      // Take remote if local is 0/default, otherwise keep local
-      result[tier][mat] = lv > 0 ? lv : rv;
-    }
-  }
-  return result;
-}
-
-// =====================================================
-// AUTO-SYNC (background polling for true cross-device sync)
-// =====================================================
-
-async function checkRemoteChanges({ silent = true } = {}) {
-  if (!syncConfig || !syncConfig.token || !syncConfig.gistId) return false;
-  if (syncInFlight) return false;
-  syncInFlight = true;
-  try {
-    const res = await gistApi(`/gists/${syncConfig.gistId}?_=${Date.now()}`, 'GET', null, syncConfig.token);
-    if (!res.ok) return false;
-    const data = await res.json();
-    const file = data.files[SYNC_FILENAME] || Object.values(data.files)[0];
-    if (!file) return false;
-    const remote = JSON.parse(file.content);
-    const remoteUpdated = remote._updated || data.updated_at || '';
-    const localUpdated = state._updated || '';
-
-    // Update in-memory tracking
-    syncStatus.remoteUpdated = remoteUpdated;
-
-    // Compare timestamps — newer wins
-    if (remoteUpdated === localUpdated) {
-      // Already in sync (timestamps match exactly)
-      setSyncStatus('ok', `☁️ Sincronizado · ${remote.registro?.length || 0} ops`);
-      return false;
-    }
-
-    const localCount = state.registro.length;
-    const remoteCount = remote.registro?.length || 0;
-
-    console.log('[AutoSync] Compare:', { localUpdated, remoteUpdated, localCount, remoteCount });
-
-    // SAFETY: NEVER push if local has fewer ops than remote (could wipe data)
-    if (localCount > 0 && remoteCount > localCount) {
-      console.warn('[AutoSync] SAFETY: Local has fewer ops than remote — switching to pull instead of push');
-      setSyncStatus('warn', `⚠️ Local tiene ${localCount} ops · nube tiene ${remoteCount} · trayendo…`);
-      if (localCount === 0) {
-        await applyRemoteData(remote, silent);
-      } else {
-        const merge = mergeRegistros(state.registro, remote.registro);
-        if (merge.addedFromRemote > 0) {
-          state.registro = merge.merged.map(op => migrateOpVenta(op));
-          state.precios = mergePrecios(state.precios, remote.precios);
-          if (remote.sellos) state.sellos = { ...state.sellos, ...remote.sellos };
-          state._updated = remoteUpdated;
-          saveState();
-          initPrecios();
-          updateCalculadora();
-          updateRegistro();
-          updateDashboard();
-          updateStorageInfo();
-          syncStatus.lastSync = new Date();
-          setSyncStatus('ok', `☁️ Merge · ${merge.keptUniqueLocal} locales + ${merge.addedFromRemote} remotas = ${merge.merged.length}`);
-          if (!silent) showToast(`☁️ ${merge.addedFromRemote} ops nuevas de la nube (total: ${merge.merged.length})`, 'success');
-        }
-      }
-      return true;
-    }
-
-    // Determine which is newer (only when counts are equal or local has more)
-    const remoteIsNewer = !localUpdated || remoteUpdated > localUpdated;
-
-    if (remoteIsNewer) {
-      // Remote is newer (or local is empty) → pull
-      if (localCount === 0) {
-        // Local empty, just take remote
-        await applyRemoteData(remote, silent);
-        state._updated = remoteUpdated;
-        if (!silent) showToast(`☁️ ${remoteCount} operaciones descargadas de la nube`, 'success');
-      } else {
-        // Both have data → smart merge
-        const merge = mergeRegistros(state.registro, remote.registro);
-        console.log('[AutoSync] Smart merge:', merge);
-        if (merge.addedFromRemote > 0) {
-          state.registro = merge.merged.map(op => migrateOpVenta(op));
-          state.precios = mergePrecios(state.precios, remote.precios);
-          if (remote.sellos) state.sellos = { ...state.sellos, ...remote.sellos };
-          state._updated = remoteUpdated;
-          saveState();
-          initPrecios();
-          updateCalculadora();
-          updateRegistro();
-          updateDashboard();
-          updateStorageInfo();
-          syncStatus.lastSync = new Date();
-          setSyncStatus('ok', `☁️ Merge · ${merge.keptUniqueLocal} locales + ${merge.addedFromRemote} remotas = ${merge.merged.length}`);
-          if (!silent) showToast(`☁️ ${merge.addedFromRemote} ops nuevas de la nube (total: ${merge.merged.length})`, 'success');
-        } else {
-          // No new items, just update timestamps
-          state._updated = remoteUpdated;
-          saveState();
-          setSyncStatus('ok', `☁️ Sincronizado · ${merge.merged.length} ops`);
-        }
-      }
-    } else {
-      // Local is newer → push (with safety check inside pushToGist)
-      console.log('[AutoSync] Local newer, pushing');
-      await pushToGist();
-    }
-    return true;
-  } catch (e) {
-    console.warn('[AutoSync] Check failed:', e.message);
-    return false;
-  } finally {
-    syncInFlight = false;
-  }
-}
-
-async function applyRemoteData(remote, silent) {
-  state.precios = remote.precios;
-  if (remote.sellos) state.sellos = { ...state.sellos, ...remote.sellos };
-  state.registro = (remote.registro || []).map(op => migrateOpVenta(op));
-  if (remote.premium !== undefined) state.premium = remote.premium;
-  saveState();
+// Vuelve a pintar todo con el state actual (tras cargar datos de la nube).
+function refreshAllViews() {
+  document.documentElement.dataset.theme = state.theme;
+  updateThemeIcon();
+  const premCalc = document.getElementById('cfgPremium');
+  if (premCalc) premCalc.checked = state.premium;
+  const premRoyal = document.getElementById('royalPremium');
+  if (premRoyal) premRoyal.checked = state.premium;
+  updateTaxHint();
+  updateRoyalDebug();
   initPrecios();
   updateCalculadora();
+  updateRoyalCalc();
   updateRegistro();
   updateDashboard();
   updateStorageInfo();
-  syncStatus.lastSync = new Date();
-  setSyncStatus('ok', `☁️ Auto-sync · ${remote.registro.length} ops`);
-  console.log('[AutoSync] Applied remote data:', remote.registro.length, 'ops');
-}
-
-let lastFocusCheck = 0;
-
-function startAutoSync() {
-  if (syncInterval) return; // Already running
-  // Poll every 5 minutes (was 30s — caused rate limit issues)
-  syncInterval = setInterval(() => {
-    if (!document.hidden && document.visibilityState === 'visible') {
-      checkRemoteChanges({ silent: false });
-    }
-  }, 300000); // 5 min
-  // Also check immediately when tab becomes visible (but throttle: max 1 per minute)
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
-      const now = Date.now();
-      if (now - lastFocusCheck > 60000) { // throttle to 1/min
-        lastFocusCheck = now;
-        checkRemoteChanges({ silent: false });
-      }
-    }
-  });
-  // Window focus: throttle
-  window.addEventListener('focus', () => {
-    const now = Date.now();
-    if (now - lastFocusCheck > 60000) {
-      lastFocusCheck = now;
-      checkRemoteChanges({ silent: false });
-    }
-  });
-  console.log('[AutoSync] Started · polling every 5min when visible (throttled)');
-}
-
-function stopAutoSync() {
-  if (syncInterval) {
-    clearInterval(syncInterval);
-    syncInterval = null;
-  }
-}
-
-function updateSyncUI() {
-  const statusEl = document.getElementById('syncStatus');
-  const tokenInput = document.getElementById('ghToken');
-  const gistInput = document.getElementById('ghGistId');
-  const connectedView = document.getElementById('syncConnectedView');
-  const setupView = document.getElementById('syncSetupView');
-  const connectedInfo = document.getElementById('syncConnectedInfo');
-
-  if (!statusEl) return;
-
-  const connected = syncConfig && syncConfig.token && syncConfig.gistId;
-
-  // Toggle between connected (minimal) and setup views
-  if (connectedView) connectedView.classList.toggle('hidden', !connected);
-  if (setupView) setupView.classList.toggle('hidden', connected);
-
-  // Fill inputs if not focused (only when setup view is shown)
-  if (!connected) {
-    if (tokenInput && document.activeElement !== tokenInput) {
-      tokenInput.value = syncConfig?.token || '';
-    }
-    if (gistInput && document.activeElement !== gistInput) {
-      gistInput.value = syncConfig?.gistId || '';
-    }
-  }
-
-  // Connected view info
-  if (connected && connectedInfo) {
-    const lastSyncText = syncStatus.lastSync
-      ? `Última actualización: ${syncStatus.lastSync.toLocaleTimeString()}`
-      : 'Sincronizando…';
-    const userText = syncConfig?.user ? ` · @${syncConfig.user}` : '';
-    const opCount = state.registro.length;
-    connectedInfo.innerHTML = `
-      ${opCount} operación${opCount !== 1 ? 'es' : ''} sincronizada${opCount !== 1 ? 's' : ''} en la nube${userText}
-      <br><small class="hint">${lastSyncText}</small>
-    `;
-  }
-}
-
-async function handleSyncSave() {
-  const token = document.getElementById('ghToken').value.trim();
-  const gistIdIn = document.getElementById('ghGistId').value.trim();
-  if (!token) {
-    showToast('Pega tu GitHub Token primero', 'warn');
-    return;
-  }
-  setSyncStatus('syncing', 'Probando conexión…');
-  try {
-    const { user } = await testGistConnection(token, gistIdIn || null);
-    let gistId = gistIdIn;
-    const isNewGist = !gistId;
-    if (isNewGist) {
-      // Warn user before creating a NEW gist (likely accidental)
-      const existingNote = syncConfig ? `\n\nDetecté que ya tienes otro Gist configurado (${syncConfig.gistId?.slice(0,8)}…). ¿Seguro que quieres crear uno NUEVO y dejar el anterior aislado?` : '';
-      if (!confirm(`No ingresaste Gist ID, así que voy a CREAR uno nuevo vacío.${existingNote}\n\nSi quieres conectar con un Gist existente, cancélalo y pega el Gist ID primero.\n\n¿Crear nuevo Gist?`)) {
-        setSyncStatus('idle', 'Cancelado. Pega un Gist ID existente para conectar.');
-        return;
-      }
-      setSyncStatus('syncing', 'Creando Gist privado…');
-      gistId = await createGist(token);
-    }
-    saveSyncConfig({ token, gistId, user });
-    setSyncStatus('ok', `✅ Conectado como @${user}`);
-
-    if (isNewGist) {
-      // New gist → safe to push current local state (both should be empty)
-      showToast(`☁️ Sincronización activa · Gist nuevo creado`, 'success');
-      setTimeout(pushToGist, 300);
-    } else {
-      // Existing gist → DON'T auto-push (could overwrite remote data with empty local)
-      // Instead, trigger an auto-check immediately to pull any remote data
-      showToast(`☁️ Conectado · Sincronizando automáticamente…`, 'success');
-      setSyncStatus('idle', `☁️ Conectado como @${user} · buscando cambios…`);
-      setTimeout(() => checkRemoteChanges({ silent: false }), 500);
-    }
-    // Start background auto-sync polling
-    startAutoSync();
-  } catch (e) {
-    setSyncStatus('error', `❌ ${e.message}`);
-    showToast(`Error: ${e.message}`, 'error');
-  }
-}
-
-async function handleSyncTest() {
-  // Use saved config token if connected, otherwise read from input
-  const token = (syncConfig && syncConfig.token) || document.getElementById('ghToken').value.trim();
-  const gistId = (syncConfig && syncConfig.gistId) || document.getElementById('ghGistId').value.trim();
-  if (!token) {
-    showToast('Pega tu GitHub Token primero', 'warn');
-    return;
-  }
-  setSyncStatus('syncing', 'Probando…');
-  try {
-    const { user } = await testGistConnection(token, gistId || null);
-    setSyncStatus('ok', `✅ Token válido (@${user})${gistId ? ` · Gist accesible` : ''}`);
-    showToast(`Token OK como @${user}`, 'success');
-  } catch (e) {
-    setSyncStatus('error', `❌ ${e.message}`);
-    showToast(`Error: ${e.message}`, 'error');
-  }
-}
-
-function handleSyncDisconnect() {
-  if (!confirm('¿Desconectar la sincronización?\nTu data local y la del Gist NO se borran, solo se deja de sincronizar.')) return;
-  clearSyncConfig();
-  stopAutoSync();
-  syncStatus.remoteUpdated = null;
-  setSyncStatus('idle', 'Desconectado. Datos solo en este dispositivo.');
-  showToast('🔌 Sincronización desconectada', 'info');
 }
 
 function handleRestoreBackup() {
@@ -1308,6 +667,7 @@ function guardarOperacion() {
   const estado = calcEstado(r.profit, r.roi, r.profitUnit, state.registro);
 
   const reg = {
+    id: CaerleonCloud.newId(),
     fecha: localDateStr(),
     tipo: op.tipo,
     tier: parseInt(op.tier),
@@ -1325,6 +685,7 @@ function guardarOperacion() {
     profitUnit: r.profitUnit,
     estado: estado.label,
     notas: '',
+    ventas: [],
   };
   state.registro.push(reg);
   saveState();
@@ -1611,12 +972,14 @@ function registerRoyalOperation() {
     return;
   }
   const r = calcRoyal(inp);
+  // calcRoyal devuelve el ROI en porcentaje; el historial lo guarda como fracción
+  const estado = calcEstado(r.profit, r.roi / 100, r.profitUnit, state.registro);
   const slot = ROYAL_SLOTS[inp.slot];
   const itemId = `T${inp.tier}_${slot.slot}_${ROYAL_MATERIAL_NAMES[inp.material]}_ROYAL@0`;
   const displayName = `${slot.name} T${inp.tier} (${ROYAL_MATERIAL_DISPLAY[inp.material]})`;
 
   const reg = {
-    id: 'r_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+    id: CaerleonCloud.newId(),
     fecha: localDateStr(),
     tipo: 'Sellos Reales',
     tier: inp.tier,
@@ -1640,6 +1003,8 @@ function registerRoyalOperation() {
     roi: r.roi / 100,
     inversion: r.totalCost,
     notas: `${r.sigilsPerCraft}× ${ROYAL_TIER_NAMES[inp.tier]} · ${ROYAL_MATERIAL_DISPLAY[inp.material]}`,
+    estado: estado.label,
+    ventas: [],
   };
   state.registro.push(reg);
   saveState();
@@ -2587,12 +1952,6 @@ function initSettings() {
   document.getElementById('fileImport').addEventListener('change', importarJSON);
   document.getElementById('btnClear').addEventListener('click', borrarTodo);
 
-  // GitHub Gist sync
-  document.getElementById('btnSyncSave').addEventListener('click', handleSyncSave);
-  document.getElementById('btnSyncTest').addEventListener('click', handleSyncTest);
-  document.getElementById('btnSyncNow').addEventListener('click', pushToGist);
-  document.getElementById('btnSyncPull').addEventListener('click', pullFromGist);
-  document.getElementById('btnSyncDisconnect').addEventListener('click', handleSyncDisconnect);
   const btnRestore = document.getElementById('btnRestoreBackup');
   if (btnRestore) btnRestore.addEventListener('click', handleRestoreBackup);
 
@@ -2600,7 +1959,6 @@ function initSettings() {
   populateMonthSelect();
   setupDashboardControls();
   updateStorageInfo();
-  updateSyncUI();
 }
 
 function setupDashboardControls() {
@@ -2715,10 +2073,10 @@ function importarJSON(e) {
     try {
       const data = JSON.parse(ev.target.result);
       if (!data.precios || !data.registro) throw new Error('Formato inválido');
-      if (!confirm(`¿Importar ${data.registro.length} operaciones? Esto REEMPLAZARÁ tus datos actuales.`)) return;
+      if (!confirm(`¿Importar ${data.registro.length} operaciones? Esto REEMPLAZARÁ tus datos actuales, también en la nube.`)) return;
       state.precios = data.precios;
       if (data.sellos) state.sellos = data.sellos;
-      state.registro = data.registro.map(op => migrateOpVenta(op));
+      state.registro = normalizeForCloud(data.registro.map(op => migrateOpVenta(op)));
       saveState();
       initPrecios();
       updateCalculadora();
@@ -2735,13 +2093,14 @@ function importarJSON(e) {
 }
 
 function borrarTodo() {
-  if (!confirm('⚠️ ¿BORRAR TODO? Esta acción no se puede deshacer.')) return;
+  if (!confirm('⚠️ ¿BORRAR TODO? Se borran tus operaciones y precios también de la nube. Esta acción no se puede deshacer.')) return;
   if (!confirm('¿Seguro? Tus operaciones y precios se perderán.')) return;
   state = {
     precios: structuredClone(DEFAULT_PRECIOS),
     sellos: structuredClone(DEFAULT_SELLOS),
     registro: [],
     theme: state.theme,
+    premium: state.premium,
   };
   saveState();
   initPrecios();
@@ -2806,6 +2165,9 @@ function showToast(msg, type = 'info') {
 // =====================================================
 
 document.addEventListener('DOMContentLoaded', async () => {
+  // Login + carga de datos desde Supabase antes de pintar nada
+  await CloudSync.boot();
+
   // Update all hardcoded icon paths to match current IMG_BASE
   // (so if user changes IMG_BASE, all icons update automatically)
   // Material icons default to T5 (will be updated when user changes tier in calculator)
@@ -2826,38 +2188,24 @@ document.addEventListener('DOMContentLoaded', async () => {
   initDashboard();
   initSettings();
 
-  // SAFETY CHECK: If local is empty BUT we have a backup, offer to restore
-  if (state.registro.length === 0) {
-    try {
-      const raw = localStorage.getItem(BACKUP_KEY);
-      if (raw) {
-        const backup = JSON.parse(raw);
-        if (backup.registro && backup.registro.length > 0) {
-          const age = backup._backupAt ? new Date(backup._backupAt).toLocaleString() : '?';
-          if (confirm(`⚠️ Detecté que tu local está vacío pero hay un backup con ${backup.registro.length} operaciones (de ${age}).\n\n¿Restaurar desde backup?\n(Cancela si quieres descargar de la nube)`)) {
-            if (restoreFromBackup()) {
-              showToast(`♻️ ${backup.registro.length} operaciones restauradas del backup`, 'success');
-              console.log('[Safety] Restored from local backup');
-            }
-          }
-        }
-      }
-    } catch (e) { /* best effort */ }
-  }
-
-  // Auto-pull from cloud on init if configured AND local is empty
-  if (syncConfig && syncConfig.token && syncConfig.gistId) {
-    // Start background auto-sync (polls every 30s when tab is visible)
-    startAutoSync();
-    if (state.registro.length === 0) {
-      setTimeout(() => {
-        checkRemoteChanges({ silent: false });
-      }, 500);
-    } else {
-      setSyncStatus('idle', `☁️ Conectado como @${syncConfig.user || '?'} · auto-sync activo`);
-    }
-  }
+  // Sincronización en tiempo real con los demás dispositivos
+  CloudSync.start();
 });
 
 // Expose delete function globally for onclick
 window.deleteRegistro = deleteRegistro;
+
+// Puente con cloud-ui.js
+window.CaerleonApp = {
+  getState: () => state,
+  setState: (next) => { state = next; },
+  loadLocalState: loadState,
+  saveLocal: saveState,
+  refreshAllViews,
+  normalize: normalizeForCloud,
+  showToast,
+  defaults: () => ({
+    precios: structuredClone(DEFAULT_PRECIOS),
+    sellos: structuredClone(DEFAULT_SELLOS),
+  }),
+};
