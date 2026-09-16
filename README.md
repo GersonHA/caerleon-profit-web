@@ -87,6 +87,17 @@ clasifican.
 | Operaciones de Sellos Reales | quedaban **sin estado** | se clasifican |
 | "Nuevo intento de venta" | los campos **Comprador** y **Estado** no se veían (CSS) → toda venta quedaba *Vendido / Mercado Negro* | visibles |
 | "Borrar todo" | perdía la preferencia Premium | la conserva |
+| Orden del Registro | agrupado por estado y por hora de la última venta (las ventas migradas tenían todas "12:00") | de la última operación registrada a la primera |
+| Filtro de tipo | no tenía "Sellos Reales" | lo tiene |
+| Operaciones Reales en Registro / Top | ícono de runa y nombre "Sellos Reales T5.0" | ícono y nombre de la pieza: "Casco Real (Tela)" |
+| Notas de ventas | se insertaban como HTML | se muestran como texto |
+| Calculadora / Sellos Reales | línea de depuración visible (`state.premium=… taxRate=…`) | quitada |
+| Tarjetas de ganancia | siempre verdes, incluso con pérdida | rojas si hay pérdida |
+| Resultado de Sellos Reales | etiqueta y valor uno debajo del otro; impuesto "−0" | en una fila; "0" |
+| Leyenda del gráfico de estados | punto de color + emoji repetido | solo el punto |
+| Celular: Precios | los números se cortaban ("18" en vez de 186) | completos |
+| Celular: Registro | tabla ancha, filas muy altas | tarjetas compactas |
+| Ícono de la pestaña | no tenía (error 404) | ⚔️ |
 
 Operaciones nuevas: nacen como **⚪ Crafteado** hasta que les registras un
 intento de venta. (En la versión anterior, al recargar la página se les creaba
@@ -147,7 +158,7 @@ npm test                  # todo: unitarias + integración + navegador
 |---|---|
 | `test:unit` (20) | el motor de cálculo es idéntico al original; solo cambió lo previsto; tus 43 operaciones y las 500 de muestra ida y vuelta sin perder nada; cálculo de diferencias |
 | `test:integration` (14) | registro cerrado; login; alta con precios por defecto; subir/editar/borrar exacto; >1000 filas; **un usuario no ve ni toca datos de otro**; sin sesión no se ve nada; tiempo real entre dispositivos |
-| `test:e2e` (5) | en Edge: login, importar tu JSON, calculadora, sellos, ventas, precios, tema, recarga, borrar, cerrar sesión, **PC ↔ celular en vivo**, subida de datos de la versión anterior |
+| `test:e2e` (14) | en Edge: login, importar tu JSON, calculadora, sellos, ventas, precios, tema, recarga, borrar, cerrar sesión, **PC ↔ celular en vivo**, subida de datos de la versión anterior, y cada arreglo de interfaz (orden, notas, filtros, colores, vista de celular) |
 
 Probar la página a mano con el Supabase local:
 

@@ -556,7 +556,7 @@ select {
   border-color: var(--success-border);
 }
 
-.result-item.success.big {
+.result-item.big {
   font-size: 1.05rem;
   font-weight: 600;
 }
@@ -1361,7 +1361,8 @@ canvas {
   margin-top: 2px;
 }
 
-.royal-costs, .royal-summary-right .cost-row {
+/* Contenedores en columna; cada fila (.cost-row) va en horizontal */
+.royal-costs, .royal-summary-right {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
@@ -1879,3 +1880,101 @@ body[data-screen="app"] .app { animation: tab-in var(--dur-modal) var(--ease-out
   box-shadow: 0 0 0 3px var(--accent-dim);
 }
 [data-theme="dark"] .modal-content .input { color-scheme: dark; }
+
+/* =====================================================
+   AJUSTES DE INTERFAZ (v6.1)
+   ===================================================== */
+
+/* Tarjeta de ganancia en rojo cuando hay pérdida */
+.result-item.danger {
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
+}
+.result-item.danger .result-val { color: var(--danger); }
+
+/* Filtros del Registro con el mismo estilo que el buscador */
+.filters select {
+  background-color: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 2.5rem 0.55rem 0.75rem;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.9rem;
+  transition: border-color var(--dur-hover) var(--ease-out),
+              box-shadow var(--dur-hover) var(--ease-out);
+}
+.filters select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+/* Precios en celular: sin el ícono junto a cada campo (ya está en la
+   cabecera), para que los números no se corten */
+#tab-precios .card-body { overflow-x: auto; }
+@media (max-width: 600px) {
+  #preciosBody .mat-icon-sm { display: none; }
+  #preciosBody td,
+  #tab-precios .editable-table th { padding-left: 0.35rem; padding-right: 0.35rem; }
+  #preciosBody input { padding: 0.45rem 0.4rem; }
+}
+
+/* Registro en celular: cada operación como una tarjeta compacta */
+@media (max-width: 640px) {
+  .registro-table thead { display: none; }
+  .registro-table,
+  .registro-table tbody { display: block; width: 100%; }
+
+  .registro-table tr.op-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem 0;
+    padding: 0.6rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .registro-table tr.op-row td {
+    display: block;
+    border: none;
+    padding: 0;
+    background: transparent;
+    white-space: nowrap;
+  }
+
+  /* Línea 1: ▶ | tipo | ganancia | borrar */
+  .registro-table .c-expand { order: 0; width: 2rem; }
+  .registro-table .c-tipo {
+    order: 1;
+    flex: 1 0 calc(100% - 2rem - 6.5rem - 2.5rem);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-weight: 600;
+  }
+  .registro-table .c-profit { order: 2; width: 6.5rem; text-align: right; }
+  .registro-table .c-del { order: 3; width: 2.5rem; text-align: right; }
+
+  /* Línea 2: estado y datos como etiquetas pequeñas */
+  .registro-table .c-estado { order: 4; margin-left: 2rem; margin-right: 0.5rem; }
+  .registro-table .c-fecha { order: 5; }
+  .registro-table .c-tier { order: 6; }
+  .registro-table .c-ench { order: 7; }
+  .registro-table .c-qty { order: 8; }
+  .registro-table .c-inv { order: 9; }
+  .registro-table .c-venta { order: 10; }
+  .registro-table :is(.c-fecha, .c-tier, .c-ench, .c-qty, .c-inv, .c-venta) {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    margin-right: 0.6rem;
+  }
+  .registro-table :is(.c-qty, .c-inv, .c-venta)::before {
+    content: attr(data-label) " ";
+    color: var(--text-muted);
+  }
+
+  .registro-table tr.op-detail-row,
+  .registro-table tr.op-detail-row td { display: block; width: 100%; }
+  .registro-table tr.op-detail-row.hidden { display: none; }
+  .registro-table .venta-item { flex-wrap: wrap; }
+}

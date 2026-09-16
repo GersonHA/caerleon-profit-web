@@ -73,7 +73,7 @@ const ROYAL_SIGIL_IMG = {
 };
 
 const STORAGE_KEY = 'caerleon_profit_data_v1';
-const APP_VERSION = 'v6.0-supabase';
+const APP_VERSION = 'v6.1-supabase';
 const BACKUP_KEY = 'caerleon_profit_backup_v1';
 
 // =====================================================
@@ -510,6 +510,16 @@ const fmtSilver2 = n => {
   if (n === null || n === undefined || isNaN(n)) return '—';
   return n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
+// Texto escrito por el usuario (notas, etc.) -> seguro para insertar en HTML
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 const fmtPct = n => {
   if (n === null || n === undefined || isNaN(n)) return '—';
   return (n * 100).toFixed(2) + '%';
@@ -600,6 +610,12 @@ function updateCalculadora() {
   // Color profit
   const profitEl = document.getElementById('rProfit');
   profitEl.style.color = r.profit > 0 ? 'var(--success)' : r.profit < 0 ? 'var(--danger)' : 'var(--text-primary)';
+  // Las tarjetas de ganancia eran siempre verdes, incluso con pérdida
+  ['rProfit', 'rProfitUnit'].forEach(id => {
+    const card = document.getElementById(id).closest('.result-item');
+    card.classList.toggle('success', r.profit >= 0);
+    card.classList.toggle('danger', r.profit < 0);
+  });
 
   // Costo de oportunidad
   document.getElementById('oppEnchLabel').textContent = `.${op.enchFin}`;
@@ -954,7 +970,7 @@ function updateRoyalCalc() {
   document.getElementById('royalSellQtyLbl').textContent = inp.qty;
   document.getElementById('royalTaxPctLbl').textContent = (r.taxRate * 100).toFixed(0);
   document.getElementById('royalGrossRevenue').textContent = fmt(r.gross);
-  document.getElementById('royalTaxAmount').textContent = '−' + fmt(r.taxAmount);
+  document.getElementById('royalTaxAmount').textContent = (Math.round(r.taxAmount) > 0 ? '−' : '') + fmt(r.taxAmount);
   document.getElementById('royalNetRevenue').textContent = fmt(r.netRevenue);
   document.getElementById('royalProfit').textContent = (r.profit >= 0 ? '' : '−') + fmt(Math.abs(r.profit));
   document.getElementById('royalProfit').style.color = r.profit >= 0 ? 'var(--success, #10b981)' : 'var(--danger, #ef4444)';
@@ -1089,10 +1105,10 @@ function updateRoyalSigilPrice() {
 function initRegistro() {
   // Populate tipo filter
   const filterTipo = document.getElementById('regFilterTipo');
-  TIPOS_OBJETO.forEach(t => {
+  [...TIPOS_OBJETO.map(t => t.nombre), 'Sellos Reales'].forEach(nombre => {
     const opt = document.createElement('option');
-    opt.value = t.nombre;
-    opt.textContent = t.nombre;
+    opt.value = nombre;
+    opt.textContent = nombre;
     filterTipo.appendChild(opt);
   });
 
@@ -1166,15 +1182,12 @@ function updateRegistro() {
   if (filterTipo) items = items.filter(r => r.tipo === filterTipo);
   if (filterEstado) items = items.filter(r => getOpStatus(r) === filterEstado);
 
-  // Sort: status priority (crafteado first) THEN newest activity first
-  const statusPriority = { crafteado: 0, pendiente: 1, fallido: 2, vendido: 3 };
-  items.sort((a, b) => {
-    const sa = statusPriority[getOpStatus(a)] ?? 99;
-    const sb = statusPriority[getOpStatus(b)] ?? 99;
-    if (sa !== sb) return sa - sb;
-    // Within same status: newest activity first
-    return getOpActivityTime(b).localeCompare(getOpActivityTime(a));
-  });
+  // Orden: de la última operación registrada a la primera.
+  // state.registro está en orden de registro (cada nueva se agrega al final),
+  // así que basta con invertirlo. Para ver solo las pendientes o crafteadas
+  // está el filtro de estado.
+  const position = new Map(state.registro.map((op, i) => [op, i]));
+  items.sort((a, b) => position.get(b) - position.get(a));
 
   const tbody = document.getElementById('registroBody');
   const empty = document.getElementById('regEmpty');
@@ -1203,17 +1216,17 @@ function updateRegistro() {
 
     return `
       <tr class="op-row" data-op-id="${safeId}">
-        <td><button class="expand-btn" type="button" data-toggle-id="${safeId}">▶</button></td>
-        <td>${r.fecha || '—'}</td>
-        <td><img class="mat-icon-sm" src="${imgUrl(getItemId(r.tipo, r.tier))}" alt=""> ${r.tipo}</td>
-        <td>T${r.tier}</td>
-        <td>.${r.enchIni}→.${r.enchFin}</td>
-        <td>${r.qty}</td>
-        <td>${fmtSilver(r.inversion)}</td>
-        <td>${fmtSilver(r.pVenta)}</td>
-        <td style="color: ${actualProfit > 0 ? 'var(--success)' : actualProfit < 0 ? 'var(--danger)' : 'inherit'}; font-weight:600;">${fmtSilver(actualProfit)}</td>
-        <td><span class="status-badge status-${opStatus}">${statusBadge}</span></td>
-        <td><button class="delete-btn" onclick="event.stopPropagation();deleteRegistro(${realIdx})">🗑️</button></td>
+        <td class="c-expand"><button class="expand-btn" type="button" data-toggle-id="${safeId}" aria-label="Ver intentos de venta">▶</button></td>
+        <td class="c-fecha" data-label="Fecha">${escapeHtml(r.fecha || '—')}</td>
+        <td class="c-tipo" data-label="Tipo"><img class="mat-icon-sm" src="${imgUrl(r.icon || getItemId(r.tipo, r.tier))}" alt=""> ${escapeHtml(opDisplayName(r))}</td>
+        <td class="c-tier" data-label="Nivel">T${r.tier}</td>
+        <td class="c-ench" data-label="Enc.">${r.royalSlot ? '—' : `.${r.enchIni}→.${r.enchFin}`}</td>
+        <td class="c-qty" data-label="Cant.">${r.qty}</td>
+        <td class="c-inv" data-label="Inversión">${fmtSilver(r.inversion)}</td>
+        <td class="c-venta" data-label="P. venta">${fmtSilver(r.pVenta)}</td>
+        <td class="c-profit" data-label="Ganancia" style="color: ${actualProfit > 0 ? 'var(--success)' : actualProfit < 0 ? 'var(--danger)' : 'inherit'}; font-weight:600;">${fmtSilver(actualProfit)}</td>
+        <td class="c-estado"><span class="status-badge status-${opStatus}">${statusBadge}</span></td>
+        <td class="c-del"><button class="delete-btn" onclick="event.stopPropagation();deleteRegistro(${realIdx})" aria-label="Borrar operación">🗑️</button></td>
       </tr>
       <tr class="op-detail-row hidden" id="detail-${safeId}">
         <td colspan="11">
@@ -1275,11 +1288,11 @@ function renderVentaRow(opId, v) {
   return `
     <div class="venta-item venta-${v.estado}">
       <div class="venta-info">
-        <span class="venta-fecha">${v.fecha} ${v.hora || ''}</span>
+        <span class="venta-fecha">${escapeHtml(v.fecha)} ${escapeHtml(v.hora || '')}</span>
         <span class="venta-precio">${fmtSilver(v.precio)}</span>
-        <span class="venta-comprador">${COMPRADOR_LABELS[v.comprador] || v.comprador}</span>
-        <span class="venta-estado">${ESTADO_VENTA_LABELS[v.estado] || v.estado}</span>
-        ${v.notas ? `<span class="venta-notas">${v.notas}</span>` : ''}
+        <span class="venta-comprador">${COMPRADOR_LABELS[v.comprador] || escapeHtml(v.comprador)}</span>
+        <span class="venta-estado">${ESTADO_VENTA_LABELS[v.estado] || escapeHtml(v.estado)}</span>
+        ${v.notas ? `<span class="venta-notas">${escapeHtml(v.notas)}</span>` : ''}
       </div>
       <div class="venta-actions">
         <button type="button" class="btn-tiny" data-edit-venta="${opId}|${v.id}">✏️</button>
@@ -1321,11 +1334,11 @@ function showAddVentaForm(opId, existingVentaId = null) {
         <div class="form-grid">
           <div>
             <label class="label">Fecha</label>
-            <input type="date" id="vFecha" class="input" value="${existing?.fecha || localDateStr()}">
+            <input type="date" id="vFecha" class="input" value="${escapeHtml(existing?.fecha || localDateStr())}">
           </div>
           <div>
             <label class="label">Hora</label>
-            <input type="time" id="vHora" class="input" value="${existing?.hora || new Date().toTimeString().slice(0,5)}">
+            <input type="time" id="vHora" class="input" value="${escapeHtml(existing?.hora || new Date().toTimeString().slice(0,5))}">
           </div>
           <div>
             <label class="label">Precio</label>
@@ -1351,7 +1364,7 @@ function showAddVentaForm(opId, existingVentaId = null) {
         </div>
         <div style="margin-top: 1rem;">
           <label class="label">Notas</label>
-          <textarea id="vNotas" class="input" rows="2" placeholder="Ej: Slot tomado por otro jugador, listé en player market...">${existing?.notas || ''}</textarea>
+          <textarea id="vNotas" class="input" rows="2" placeholder="Ej: Slot tomado por otro jugador, listé en player market...">${escapeHtml(existing?.notas || '')}</textarea>
         </div>
         <div class="row gap-2" style="margin-top: 1rem; justify-content: flex-end;">
           <button type="button" class="btn btn-secondary" onclick="closeVentaModal()">Cancelar</button>
@@ -1404,6 +1417,14 @@ function deleteVentaConfirm(opId, ventaId) {
 function closeVentaModal() {
   const modal = document.querySelector('.modal-backdrop');
   if (modal) modal.remove();
+}
+
+// "Casco Real (Tela)" para las operaciones Reales; el tipo para las demás
+function opDisplayName(op) {
+  const slot = op.royalSlot && ROYAL_SLOTS[op.royalSlot];
+  if (!slot) return op.tipo;
+  const material = ROYAL_MATERIAL_DISPLAY[op.royalMaterial];
+  return material ? `${slot.name} (${material})` : slot.name;
 }
 
 function getItemId(tipo, tier) {
@@ -1690,7 +1711,7 @@ function renderChartStatus() {
     legend.innerHTML = keys.map((k, i) => {
       const v = counts[k];
       return `<div class="donut-legend-item">
-        <div class="label"><span class="dot" style="background:${colors[i]}"></span>${k}</div>
+        <div class="label"><span class="dot" style="background:${colors[i]}"></span>${escapeHtml(String(k).replace(/^\p{Extended_Pictographic}\s*/u, ''))}</div>
         <div class="value">${v}</div>
       </div>`;
     }).join('');
@@ -1748,9 +1769,9 @@ function renderTopPerformers() {
     return `
       <div class="performer-item">
         <div class="performer-rank">${i + 1}</div>
-        <img class="performer-icon" src="${imgUrl(tierItemId(baseId, r.tier))}" alt="">
+        <img class="performer-icon" src="${imgUrl(r.icon || tierItemId(baseId, r.tier))}" alt="">
         <div class="performer-info">
-          <div class="performer-name">${r.tipo} T${r.tier}.${r.enchFin}</div>
+          <div class="performer-name">${escapeHtml(opDisplayName(r))} T${r.tier}${r.royalSlot ? '' : '.' + r.enchFin}</div>
           <div class="performer-meta">${r.qty}× · ${r.fecha}</div>
         </div>
         <div class="performer-value ${isPositive ? 'positive' : 'negative'}">
