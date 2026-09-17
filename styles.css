@@ -1978,3 +1978,236 @@ body[data-screen="app"] .app { animation: tab-in var(--dur-modal) var(--ease-out
   .registro-table tr.op-detail-row.hidden { display: none; }
   .registro-table .venta-item { flex-wrap: wrap; }
 }
+
+/* =====================================================
+   DASHBOARD v7: controles, indicadores y paneles editables
+   ===================================================== */
+
+.dash-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.dash-periods {
+  display: inline-flex;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2px;
+  gap: 2px;
+}
+.period-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 500;
+  padding: 0.4rem 0.8rem;
+  border-radius: calc(var(--radius) - 3px);
+  cursor: pointer;
+  transition: background-color var(--dur-hover) var(--ease-out),
+              color var(--dur-hover) var(--ease-out),
+              transform var(--dur-press) var(--ease-out);
+}
+.period-btn:hover { color: var(--text-primary); }
+.period-btn:active { transform: scale(0.97); }
+.period-btn.active {
+  background: var(--bg-card);
+  color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.dash-extra,
+.dash-goal {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.dash-extra .label,
+.dash-goal .label { margin: 0; white-space: nowrap; }
+.dash-goal input[type="number"] { width: 8.5rem; }
+.dash-goal select,
+.dash-extra select,
+.dash-extra input[type="date"],
+.dash-goal input {
+  background-color: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.4rem 0.6rem;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.85rem;
+}
+.dash-goal select,
+.dash-extra select { padding-right: 2.2rem; }
+.dash-goal #dashEdit { margin-left: auto; }
+#dashEdit.active { border-color: var(--accent); color: var(--accent); }
+
+.dash-range-label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-bottom: 1rem;
+}
+
+/* ---------- Editor ---------- */
+.dash-editor-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+}
+@media (max-width: 600px) {
+  .dash-editor-cols { grid-template-columns: 1fr; }
+}
+.dash-toggles {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+}
+.dash-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.88rem;
+  cursor: pointer;
+  padding: 0.25rem 0.35rem;
+  border-radius: var(--radius-sm);
+  transition: background-color var(--dur-hover) var(--ease-out);
+}
+.dash-toggle:hover { background: var(--bg-subtle); }
+.dash-toggle input { accent-color: var(--accent); width: 15px; height: 15px; }
+
+/* ---------- Indicadores ---------- */
+.kpi-card .kpi-sub {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-top: 0.15rem;
+}
+.kpi-card .kpi-delta {
+  font-size: 0.72rem;
+  font-weight: 600;
+  margin-top: 0.35rem;
+}
+.kpi-card .kpi-delta.up { color: var(--success); }
+.kpi-card .kpi-delta.down { color: var(--danger); }
+
+/* ---------- Paneles ---------- */
+.dash-panel .panel-tools {
+  display: flex;
+  gap: 0.25rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-hover) var(--ease-out);
+}
+body.dash-editing .dash-panel .panel-tools {
+  opacity: 1;
+  pointer-events: auto;
+}
+body.dash-editing .dash-panel {
+  outline: 1px dashed var(--accent-border);
+  outline-offset: 3px;
+}
+
+.chart-box { position: relative; width: 100%; }
+.chart-box canvas { max-width: 100%; }
+
+.panel-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  margin-bottom: 0.75rem;
+}
+
+.dash-empty {
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  text-align: center;
+  padding: 1.5rem 0.5rem;
+  margin: 0;
+}
+
+.pos { color: var(--success); font-weight: 600; }
+.neg { color: var(--danger); font-weight: 600; }
+
+/* ---------- Meta ---------- */
+.meta-layout {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) 1fr;
+  gap: 1.25rem;
+  align-items: center;
+}
+@media (max-width: 700px) {
+  .meta-layout { grid-template-columns: 1fr; }
+}
+.meta-datos {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.meta-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.88rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px dashed var(--border);
+}
+.meta-row:last-child { border-bottom: none; }
+.meta-row span { color: var(--text-secondary); }
+.meta-row.destacado {
+  justify-content: center;
+  color: var(--success);
+  font-weight: 600;
+}
+
+/* ---------- Tablas del dashboard ---------- */
+.inventario-table td,
+.rentabilidad-table td { white-space: nowrap; }
+.inventario-table .mat-icon-sm { vertical-align: middle; }
+
+@media (max-width: 640px) {
+  .dash-toolbar { gap: 0.5rem; }
+  .dash-periods { width: 100%; justify-content: space-between; }
+  .period-btn { flex: 1; padding: 0.4rem 0.25rem; text-align: center; }
+  .dash-goal { width: 100%; }
+  .dash-goal input[type="number"] { flex: 1; width: auto; }
+  #dashEdit { width: 100%; }
+}
+
+/* La regla general `select.input { display: none }` (pensada para los menús
+   personalizados) también ocultaba los selectores del Dashboard. */
+.dash-toolbar select.input { display: inline-block; }
+
+/* Separación entre paneles del Dashboard (antes quedaban pegados) */
+#dashPanels {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+#dashPanels .dash-panel { margin-bottom: 0; }
+
+.dash-formato {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+.dash-formato .label { margin: 0; }
+.dash-formato select.input {
+  display: inline-block;
+  background-color: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.4rem 2.2rem 0.4rem 0.6rem;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.85rem;
+}
+.dash-formato .hint { margin: 0; flex-basis: 100%; }

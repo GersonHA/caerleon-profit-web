@@ -5,12 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Calculadora de Profit de Caerleon</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ctext y=%22.9em%22 font-size=%2290%22%3E%E2%9A%94%EF%B8%8F%3C/text%3E%3C/svg%3E">
-<link rel="stylesheet" href="styles.css?v=6.1">
+<link rel="stylesheet" href="styles.css?v=7.0">
 <script src="chart.umd.min.js"></script>
 <script src="vendor/supabase.umd.js"></script>
-<script src="config.js?v=6.1"></script>
-<script src="js/cloud-core.js?v=6.1"></script>
-<script src="js/cloud-ui.js?v=6.1"></script>
+<script src="config.js?v=7.0"></script>
+<script src="js/cloud-core.js?v=7.0"></script>
+<script src="js/cloud-ui.js?v=7.0"></script>
+<script src="js/dashboard-core.js?v=7.0"></script>
 </head>
 <body data-screen="loading">
 
@@ -431,100 +432,80 @@
 
     <!-- ========== TAB: DASHBOARD ========== -->
     <section id="tab-dashboard" class="tab-content">
-      <!-- Period selector + Goal config -->
-      <div class="dashboard-toolbar">
-        <div class="period-selector">
-          <label>Período</label>
-          <select id="dashPeriod">
-            <option value="week">Última semana</option>
-            <option value="month" selected>Mes</option>
-            <option value="custom">Por fecha</option>
-          </select>
-          <select id="dashMonthSelect" class="hidden">
-            <!-- populated by JS -->
+      <!-- ===== BARRA DE CONTROLES ===== -->
+      <div class="dash-toolbar">
+        <div class="dash-periods" role="group" aria-label="Período">
+          <button type="button" class="period-btn" data-period="today">Hoy</button>
+          <button type="button" class="period-btn" data-period="week">7 días</button>
+          <button type="button" class="period-btn active" data-period="month">Mes</button>
+          <button type="button" class="period-btn" data-period="all">Todo</button>
+          <button type="button" class="period-btn" data-period="custom">Fechas</button>
+        </div>
+
+        <div class="dash-extra hidden" id="dashMonthWrap">
+          <select id="dashMonth" class="input" aria-label="Mes"></select>
+        </div>
+
+        <div class="dash-extra hidden" id="dashCustomWrap">
+          <label class="label" for="dashFrom">Desde</label>
+          <input type="date" id="dashFrom" class="input">
+          <label class="label" for="dashTo">Hasta</label>
+          <input type="date" id="dashTo" class="input">
+        </div>
+
+        <div class="dash-goal">
+          <label class="label" for="dashGoalAmount">Meta</label>
+          <input type="number" id="dashGoalAmount" class="input" value="1000000" min="0" step="100000">
+          <select id="dashGoalPeriod" class="input" aria-label="Período de la meta">
+            <option value="day">por día</option>
+            <option value="week">por semana</option>
+            <option value="month" selected>por mes</option>
           </select>
         </div>
-        <div class="goal-config" id="goalConfig">
-          <label>Meta</label>
-          <input type="number" id="dashGoalAmount" value="1000000" min="0" step="100000">
-          <select id="dashGoalPeriod">
-            <option value="day">diaria</option>
-            <option value="week">semanal</option>
-            <option value="month" selected>mensual</option>
-          </select>
-        </div>
-      </div>
-      <div class="period-custom hidden" id="periodCustom">
-        <label>Desde</label>
-        <input type="date" id="dashDateFrom">
-        <label>Hasta</label>
-        <input type="date" id="dashDateTo">
+
+        <button type="button" id="dashEdit" class="btn btn-secondary btn-sm">⚙️ Personalizar</button>
       </div>
 
+      <div class="dash-range-label" id="dashRangeLabel"></div>
+
+      <!-- ===== EDITOR DEL PANEL ===== -->
+      <div class="card dash-editor hidden" id="dashEditor">
+        <div class="card-body">
+          <p class="hint" style="margin-top:0">
+            Elige qué ver. Se guarda en tu cuenta, así que tu laptop y tu celular
+            muestran el mismo panel. Con las flechas ↑ ↓ de cada tarjeta cambias el orden.
+          </p>
+          <div class="dash-formato">
+            <label class="label" for="dashFormato">Números</label>
+            <select id="dashFormato" class="input" data-editor="formato">
+              <option value="entero">Redondeados: 13 M · 350 k</option>
+              <option value="compacto">Con un decimal: 12,9 M · 350,4 k</option>
+              <option value="completo">Completos: 12.852.615</option>
+            </select>
+            <span class="hint">Al pasar el mouse por un gráfico siempre ves la cifra exacta.</span>
+          </div>
+
+          <div class="dash-editor-cols">
+            <div>
+              <div class="label">Indicadores</div>
+              <div class="dash-toggles" data-editor="kpis"></div>
+            </div>
+            <div>
+              <div class="label">Paneles</div>
+              <div class="dash-toggles" data-editor="panels"></div>
+            </div>
+          </div>
+          <button type="button" id="dashReset" class="btn btn-secondary btn-sm" style="margin-top:1rem">↺ Volver al panel por defecto</button>
+        </div>
+      </div>
+
+      <!-- ===== INDICADORES ===== -->
       <div class="kpi-grid" id="kpiGrid"></div>
 
-      <!-- Comparative chart: current vs previous period -->
-      <div class="chart-card">
-        <div class="chart-header-row">
-          <div>
-            <div class="chart-title">Profit por día</div>
-            <div class="chart-subtitle">Sólidas = período actual · gris = período anterior</div>
-          </div>
-          <div class="chart-trend-pill" id="compareTrend">—</div>
-        </div>
-        <canvas id="chartCompare"></canvas>
-      </div>
-
-      <div class="grid-2-cards">
-        <div class="chart-card">
-          <div class="chart-title">Distribución por estado</div>
-          <div class="chart-subtitle">Cómo se reparten tus operaciones</div>
-          <div class="donut-wrapper">
-            <canvas id="chartStatus"></canvas>
-            <div class="donut-center">
-              <div class="donut-center-value" id="donutCenterValue">0</div>
-              <div class="donut-center-label">Operaciones</div>
-            </div>
-          </div>
-          <div class="donut-legend" id="donutLegend"></div>
-        </div>
-        <div class="chart-card">
-          <div class="chart-title">Meta del período</div>
-          <div class="chart-subtitle">Progreso hacia tu objetivo</div>
-          <div class="gauge-wrapper">
-            <canvas id="chartGauge"></canvas>
-            <div class="gauge-center">
-              <div class="gauge-value" id="gaugeValue">0%</div>
-              <div class="gauge-label" id="gaugeLabel">de la meta</div>
-            </div>
-          </div>
-          <div class="goal-meta-info" id="goalMetaInfo">
-            <span id="goalRemaining">— restantes</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="grid-2-cards">
-        <div class="chart-card">
-          <div class="chart-title">Profit por tier</div>
-          <div class="chart-subtitle">Cuál te deja más silver</div>
-          <canvas id="chartTier"></canvas>
-        </div>
-        <div class="chart-card">
-          <div class="chart-title">Profit por tipo de objeto</div>
-          <div class="chart-subtitle">Cuál item es tu fuerte</div>
-          <canvas id="chartTipo" style="max-height: 220px;"></canvas>
-        </div>
-      </div>
-
-      <div class="chart-card">
-        <div class="chart-title">Top operaciones</div>
-        <div class="chart-subtitle">Tus mejores trades del período</div>
-        <div class="performer-list" id="performerList"></div>
-      </div>
+      <!-- ===== PANELES ===== -->
+      <div id="dashPanels"></div>
     </section>
 
-    <!-- ========== TAB: SETTINGS ========== -->
     <section id="tab-settings" class="tab-content">
       <!-- ===== CUENTA Y NUBE ===== -->
       <div class="card">
@@ -591,6 +572,6 @@
 
 <div id="toast" class="toast"></div>
 
-<script src="app.js?v=6.1"></script>
+<script src="app.js?v=7.0"></script>
 </body>
 </html>

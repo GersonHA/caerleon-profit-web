@@ -73,7 +73,7 @@ const ROYAL_SIGIL_IMG = {
 };
 
 const STORAGE_KEY = 'caerleon_profit_data_v1';
-const APP_VERSION = 'v6.1-supabase';
+const APP_VERSION = 'v7.0-dashboard';
 const BACKUP_KEY = 'caerleon_profit_backup_v1';
 
 // =====================================================
@@ -81,16 +81,6 @@ const BACKUP_KEY = 'caerleon_profit_backup_v1';
 // =====================================================
 
 let state = loadState();
-
-// Dashboard period/goal state (not persisted - ephemeral UI)
-let dashFilters = {
-  period: 'month',     // 'week' | 'month' | 'custom'
-  month: null,         // { year, month } when period='month'
-  customFrom: null,    // YYYY-MM-DD
-  customTo: null,      // YYYY-MM-DD
-  goalAmount: 1000000,
-  goalPeriod: 'month',
-};
 
 function loadState() {
   try {
@@ -105,6 +95,7 @@ function loadState() {
         registro,
         theme: parsed.theme || 'light',
         premium: parsed.premium !== undefined ? parsed.premium : true,
+        dashboard: parsed.dashboard || null,
       };
     }
   } catch (e) {
@@ -116,6 +107,7 @@ function loadState() {
     registro: [],
     theme: 'light',
     premium: true,
+    dashboard: null,
   };
 }
 
@@ -228,6 +220,7 @@ function saveState() {
       registro: state.registro,
       theme: state.theme,
       premium: state.premium,
+      dashboard: state.dashboard || null,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
     // Auto-backup: keep last known good state with data
@@ -323,84 +316,6 @@ function handleRestoreBackup() {
   } catch (e) {
     showToast('❌ Error: ' + e.message, 'error');
   }
-}
-
-// Period date range computation
-function getPeriodRange(period = dashFilters.period) {
-  const now = new Date();
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
-
-  switch (period) {
-    case 'week': {
-      const from = new Date(startOfToday);
-      from.setDate(startOfToday.getDate() - 6);
-      return { from, to: endOfToday, label: 'Última semana' };
-    }
-    case 'month': {
-      const m = dashFilters.month || { year: now.getFullYear(), month: now.getMonth() };
-      const from = new Date(m.year, m.month, 1);
-      const lastDay = new Date(m.year, m.month + 1, 0);
-      const lastDayEnd = new Date(m.year, m.month + 1, 0, 23, 59, 59);
-      // If it's current month, cap to today
-      const isCurrent = m.year === now.getFullYear() && m.month === now.getMonth();
-      const to = isCurrent ? endOfToday : lastDayEnd;
-      const monthNames = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
-      return { from, to, label: `${monthNames[m.month]} ${m.year}` };
-    }
-    case 'custom': {
-      const from = dashFilters.customFrom ? new Date(dashFilters.customFrom + 'T00:00:00') : startOfToday;
-      const to = dashFilters.customTo ? new Date(dashFilters.customTo + 'T23:59:59') : endOfToday;
-      return { from, to, label: 'Período custom' };
-    }
-    default:
-      return null;
-  }
-}
-
-// Previous period (same length, immediately before)
-function getPreviousPeriodRange(period = dashFilters.period) {
-  const cur = getPeriodRange(period);
-  if (!cur) return null;
-  const days = Math.round((cur.to - cur.from) / (1000 * 60 * 60 * 24)) + 1;
-  const prevTo = new Date(cur.from);
-  prevTo.setDate(prevTo.getDate() - 1);
-  const prevFrom = new Date(prevTo);
-  prevFrom.setDate(prevTo.getDate() - days + 1);
-  return { from: prevFrom, to: prevTo, label: 'Período anterior' };
-}
-
-function inRange(fecha, from, to) {
-  if (!fecha) return false;
-  const d = new Date(fecha + 'T12:00:00');
-  return d >= from && d <= to;
-}
-
-function filterByRange(from, to) {
-  return state.registro.filter(r => inRange(r.fecha, from, to));
-}
-
-// Filter registro by current dashboard period
-function getFilteredRegistro() {
-  const range = getPeriodRange();
-  if (!range) return state.registro;
-  return filterByRange(range.from, range.to);
-}
-
-function getPreviousFilteredRegistro() {
-  const prev = getPreviousPeriodRange();
-  if (!prev) return [];
-  return filterByRange(prev.from, prev.to);
-}
-
-// Compute goal progress
-function getGoalProgress() {
-  const filtered = getFilteredRegistro();
-  const totalProfit = filtered.reduce((s, r) => s + r.profit, 0);
-  const goal = dashFilters.goalAmount;
-  const pct = goal > 0 ? Math.max(0, Math.min(1.5, totalProfit / goal)) : 0;
-  const remaining = Math.max(0, goal - totalProfit);
-  return { profit: totalProfit, goal, pct, remaining };
 }
 
 // =====================================================
@@ -1447,145 +1362,542 @@ function deleteRegistro(idx) {
 // =====================================================
 
 let charts = {};
-const CHART_IDS = ['chartCompare', 'chartStatus', 'chartTipo', 'chartTier', 'chartGauge'];
+
+const CHART_ANIM = { duration: 600, easing: 'easeOutQuart' };
+
+// Cómo se lee una operación (lo mismo que usa el Registro)
+const DASH_HELPERS = {
+  status: (op) => getOpStatus(op),
+  realized: (op) => getOpActualProfit(op),
+};
+
+// Silver y porcentajes con el formato elegido en "Personalizar".
+// Los tooltips pasan 'completo' para ver la cifra exacta al pasar el mouse.
+function dashSilver(n, modo) {
+  return CaerleonDash.formatSilver(n, modo || dashCfg().numberFormat);
+}
+
+function dashPct(n, modo) {
+  return CaerleonDash.formatPercent(n, modo || dashCfg().numberFormat);
+}
+
+function dashTaxRate() {
+  return state.premium ? 0.04 : 0.08;
+}
+
+// -----------------------------------------------------
+// Configuración del panel (se guarda en tu cuenta)
+// -----------------------------------------------------
+
+const DASH_DEFAULT = {
+  period: 'month',
+  month: null,          // { year, month } cuando period = 'month'
+  from: null,           // 'YYYY-MM-DD' cuando period = 'custom'
+  to: null,
+  goalAmount: 1000000,
+  goalPeriod: 'month',  // day | week | month
+  numberFormat: 'entero', // entero (13 M) | compacto (12,9 M) | completo (12.852.615)
+  kpis: ['realizado', 'inventario', 'roi', 'vendidos'],
+  panels: ['dia', 'flujo', 'meta', 'estado', 'inventario', 'tier', 'tipo', 'rentabilidad', 'top'],
+};
+
+function dashCfg() {
+  const saved = (state.dashboard && typeof state.dashboard === 'object') ? state.dashboard : {};
+  const cfg = { ...DASH_DEFAULT, ...saved };
+  // Solo ids conocidos, y sin repetidos
+  cfg.kpis = [...new Set(cfg.kpis)].filter(id => DASH_KPIS.some(k => k.id === id));
+  cfg.panels = [...new Set(cfg.panels)].filter(id => DASH_PANELS.some(p => p.id === id));
+  if (!cfg.kpis.length) cfg.kpis = [...DASH_DEFAULT.kpis];
+  return cfg;
+}
+
+function setDashCfg(patch, { rerender = true } = {}) {
+  state.dashboard = { ...dashCfg(), ...patch };
+  saveState();
+  if (rerender) updateDashboard();
+}
+
+// -----------------------------------------------------
+// KPIs disponibles
+// -----------------------------------------------------
+
+const DASH_KPIS = [
+  {
+    id: 'realizado',
+    label: '💰 Profit realizado',
+    ayuda: 'Ganancia de las operaciones que ya vendiste, con el impuesto descontado.',
+    valor: d => d.hoy.realizado,
+    anterior: d => d.antes.realizado,
+    fmt: 'money',
+    sub: d => `${d.hoy.operacionesVendidas} vendidas`,
+    cls: d => d.hoy.realizado >= 0 ? 'success' : 'danger',
+  },
+  {
+    id: 'inventario',
+    label: '📦 En inventario',
+    ayuda: 'Lo que te costó lo que todavía no has vendido (crafteado o en venta).',
+    valor: d => d.hoy.inventarioCosto,
+    fmt: 'money',
+    sub: d => d.hoy.inventarioCantidad === 0
+      ? 'nada sin vender'
+      : `${d.hoy.inventarioCantidad} ${d.hoy.inventarioCantidad === 1 ? 'operación' : 'operaciones'} · ${dashSilver(d.hoy.inventarioPotencial)} por cobrar`,
+    cls: d => d.hoy.inventarioCantidad > 0 ? 'info' : 'neutral',
+  },
+  {
+    id: 'roi',
+    label: '📈 ROI realizado',
+    ayuda: 'Ganancia dividida entre lo que invertiste en las operaciones vendidas.',
+    valor: d => d.hoy.roiRealizado,
+    anterior: d => d.antes.roiRealizado,
+    fmt: 'pct',
+    sub: d => `${dashSilver(d.hoy.inversionTotal)} invertidos`,
+    cls: d => d.hoy.roiRealizado >= 0 ? 'success' : 'danger',
+  },
+  {
+    id: 'vendidos',
+    label: '✅ Vendidos',
+    ayuda: 'Operaciones cerradas sobre el total del período.',
+    valor: d => d.hoy.operacionesVendidas,
+    fmt: 'int',
+    sub: d => `de ${d.hoy.total} · ${dashPct(d.hoy.tasaExito)} con ganancia`,
+    cls: () => 'success',
+  },
+  {
+    id: 'perdidas',
+    label: '❌ Pérdidas',
+    ayuda: 'Inversión de las operaciones cuyos intentos de venta fallaron.',
+    valor: d => d.hoy.perdidas,
+    fmt: 'money',
+    sub: d => `${d.hoy.operacionesFallidas} fallidas`,
+    cls: d => d.hoy.perdidas > 0 ? 'danger' : 'neutral',
+  },
+  {
+    id: 'profitop',
+    label: '🎯 Profit por operación',
+    ayuda: 'Ganancia media de cada operación vendida.',
+    valor: d => d.hoy.profitPorOperacion,
+    anterior: d => d.antes.profitPorOperacion,
+    fmt: 'money',
+    sub: d => `mejor ${dashSilver(d.hoy.mejor)}`,
+    cls: d => d.hoy.profitPorOperacion >= 0 ? 'success' : 'danger',
+  },
+  {
+    id: 'inversion',
+    label: '🏦 Inversión del período',
+    ayuda: 'Silver que pusiste en todas las operaciones del período.',
+    valor: d => d.hoy.inversionTotal,
+    anterior: d => d.antes.inversionTotal,
+    fmt: 'money',
+    sub: d => `${d.hoy.total} operaciones`,
+    cls: () => 'neutral',
+  },
+  {
+    id: 'meta',
+    label: '🚩 Meta',
+    ayuda: 'Cuánto llevas de tu meta, en su propio período.',
+    valor: d => d.meta.pct,
+    fmt: 'pct',
+    sub: d => `${dashSilver(d.meta.logrado)} de ${dashSilver(d.meta.goal)} ${d.meta.range.label}`,
+    cls: d => d.meta.cumplida ? 'success' : 'info',
+  },
+];
+
+// -----------------------------------------------------
+// Paneles disponibles
+// -----------------------------------------------------
+
+const DASH_PANELS = [
+  {
+    id: 'dia',
+    titulo: 'Profit por día',
+    subtitulo: 'Barras de color = este período · grises = el anterior',
+    render: renderPanelDia,
+  },
+  {
+    id: 'flujo',
+    titulo: 'Inversión, venta y ganancia por día',
+    subtitulo: 'Lo que pusiste, lo que pagó el Mercado Negro y lo que te quedó',
+    render: renderPanelFlujo,
+  },
+  {
+    id: 'horas',
+    titulo: 'Ganancia por hora del día',
+    subtitulo: 'A qué hora vendes mejor (según la hora de cada venta)',
+    render: renderPanelHoras,
+  },
+  {
+    id: 'acumulado',
+    titulo: 'Acumulado del período',
+    subtitulo: 'Cómo se suma tu ganancia día a día',
+    render: renderPanelAcumulado,
+  },
+  {
+    id: 'meta',
+    titulo: 'Meta',
+    subtitulo: 'Progreso y ritmo necesario',
+    render: renderPanelMeta,
+  },
+  {
+    id: 'estado',
+    titulo: 'Distribución por estado',
+    subtitulo: 'Cómo se reparten tus operaciones',
+    render: renderPanelEstado,
+  },
+  {
+    id: 'inventario',
+    titulo: 'Inventario',
+    subtitulo: 'Lo que tienes sin vender',
+    render: renderPanelInventario,
+  },
+  {
+    id: 'tier',
+    titulo: 'Profit por tier',
+    subtitulo: 'Cuál te deja más silver',
+    render: renderPanelTier,
+  },
+  {
+    id: 'tipo',
+    titulo: 'Profit por tipo de objeto',
+    subtitulo: 'Cuál item es tu fuerte',
+    render: renderPanelTipo,
+  },
+  {
+    id: 'rentabilidad',
+    titulo: 'Rentabilidad',
+    subtitulo: 'Cuánto deja cada combinación de item y tier',
+    render: renderPanelRentabilidad,
+  },
+  {
+    id: 'top',
+    titulo: 'Top operaciones',
+    subtitulo: 'Tus mejores ventas del período',
+    render: renderPanelTop,
+  },
+];
+
+// -----------------------------------------------------
+// Datos del período
+// -----------------------------------------------------
+
+function dashData() {
+  const cfg = dashCfg();
+  const now = new Date();
+  const range = CaerleonDash.periodRange(cfg.period, {
+    now,
+    month: cfg.month,
+    customFrom: cfg.from,
+    customTo: cfg.to,
+    fechas: state.registro.map(o => o.fecha),
+  });
+  const prev = CaerleonDash.previousRange(range);
+  const opts = { ...DASH_HELPERS, taxRate: dashTaxRate() };
+
+  const ops = CaerleonDash.filterByRange(state.registro, range);
+  const opsPrev = CaerleonDash.filterByRange(state.registro, prev);
+
+  return {
+    cfg,
+    now,
+    range,
+    prev,
+    ops,
+    opsPrev,
+    opts,
+    hoy: CaerleonDash.summarize(ops, opts),
+    antes: CaerleonDash.summarize(opsPrev, opts),
+    meta: CaerleonDash.goalProgress(state.registro, {
+      goal: cfg.goalAmount,
+      goalPeriod: cfg.goalPeriod,
+      now,
+      ...DASH_HELPERS,
+    }),
+  };
+}
+
+// -----------------------------------------------------
+// Render principal
+// -----------------------------------------------------
+
+let dashPendiente = false;
 
 function initDashboard() {
+  const tabBtn = document.querySelector('.tab[data-tab="dashboard"]');
+  if (tabBtn) tabBtn.addEventListener('click', () => requestAnimationFrame(updateDashboard));
+  void dashPendiente;
+  bindDashControls();
   updateDashboard();
 }
 
-// Animate a number from current to target value
-function animateNumber(el, from, to, duration = 600, fmt) {
-  const start = performance.now();
-  // Infer format from el content if not given
-  if (!fmt) {
-    if (String(el.textContent).includes('%')) fmt = 'pct';
-    else if (String(el.textContent).match(/[\d,]+/) && !String(el.textContent).match(/^\d+$/)) fmt = 'money';
-    else fmt = 'int';
-  }
-
-  function tick(now) {
-    const t = Math.min(1, (now - start) / duration);
-    const eased = 1 - Math.pow(1 - t, 3);
-    const current = from + (to - from) * eased;
-    el.textContent = formatKpi(current, fmt);
-    if (t < 1) requestAnimationFrame(tick);
-  }
-  requestAnimationFrame(tick);
+function updateDashboard() {
+  if (!document.getElementById('dashPanels')) return;
+  // Chart.js no puede medir un lienzo oculto: si el Dashboard no está a la
+  // vista se deja pendiente y se dibuja al abrir la pestaña.
+  if (!dashboardVisible()) { dashPendiente = true; return; }
+  dashPendiente = false;
+  const d = dashData();
+  syncDashControls(d);
+  renderKpis(d);
+  renderPanels(d);
 }
 
-function updateDashboard() {
-  const dashboardActive = document.getElementById('tab-dashboard').classList.contains('active');
-  const reg = getFilteredRegistro();
-  const totalOps = reg.length;
+function dashboardVisible() {
+  const tab = document.getElementById('tab-dashboard');
+  return !!tab && tab.classList.contains('active');
+}
 
-  // NEW: classify ops by status derived from ventas
-  const opsSold = reg.filter(r => getOpStatus(r) === 'vendido');
-  const opsPending = reg.filter(r => getOpStatus(r) === 'pendiente');
-  const opsFailed = reg.filter(r => getOpStatus(r) === 'fallido');
-  const opsCrafted = reg.filter(r => getOpStatus(r) === 'crafteado');
+// -----------------------------------------------------
+// Controles: período, meta y modo edición
+// -----------------------------------------------------
 
-  // NEW: calculate profits using ventas (Option B)
-  const realizedProfit = opsSold.reduce((s, r) => s + getOpActualProfit(r), 0);
-  const inventoryValue = opsPending.reduce((s, r) => {
-    // Expected value = cost (what you paid to make) + expected profit
-    return s + (r.inversion || 0);
-  }, 0);
-  const inventoryCount = opsPending.length;
-  const losses = opsFailed.reduce((s, r) => s + (r.inversion || 0), 0);
-  const craftedCost = opsCrafted.reduce((s, r) => s + (r.inversion || 0), 0);
-
-  // Legacy metrics (kept for backward compat)
-  const profits = reg.map(r => r.profit);
-  const rois = reg.map(r => r.roi);
-  const pus = reg.map(r => r.profitUnit);
-  const positivos = profits.filter(p => p > 0).length;
-  const totalProfit = profits.reduce((a,b)=>a+b,0);
-  const avgProfit = totalOps > 0 ? totalProfit / totalOps : 0;
-  const medianProfit = totalOps > 0 ? percentile(profits, 0.5) : 0;
-  const avgROI = totalOps > 0 ? rois.reduce((a,b)=>a+b,0) / totalOps : 0;
-  const avgPU = totalOps > 0 ? pus.reduce((a,b)=>a+b,0) / totalOps : 0;
-  const best = profits.length > 0 ? Math.max(...profits) : 0;
-  const worst = profits.length > 0 ? Math.min(...profits) : 0;
-  const totalInvertido = reg.reduce((s,r)=>s+r.inversion,0);
-  const totalRevenue = reg.reduce((s,r)=>s+r.revNeto,0);
-  const pctExito = totalOps > 0 ? positivos / totalOps : 0;
-
-  const kpis = [
-    { id: 'kpi-realized',    label: '💰 Profit Realizado', raw: realizedProfit, fmt: 'money', cls: realizedProfit > 0 ? 'success' : 'neutral' },
-    { id: 'kpi-inventory',   label: '📦 En Inventario', raw: inventoryValue, fmt: 'money', sub: `${inventoryCount} items`, cls: inventoryCount > 0 ? 'info' : 'neutral' },
-    { id: 'kpi-failed',      label: '❌ Pérdidas', raw: losses, fmt: 'money', sub: `${opsFailed.length} fallidos`, cls: losses > 0 ? 'danger' : 'neutral' },
-    { id: 'kpi-sold-count',   label: '✅ Vendidos', raw: opsSold.length, fmt: 'int', sub: `de ${totalOps}`, cls: 'success' },
-  ];
-
-  const grid = document.getElementById('kpiGrid');
-  const existing = grid.children.length > 0;
-  if (!existing) {
-    grid.innerHTML = kpis.map(k => `
-      <div class="kpi-card ${k.cls}">
-        <span class="kpi-label">${k.label}</span>
-        <span class="kpi-value" id="${k.id}">${formatKpi(k.raw, k.fmt)}</span>
-      </div>
-    `).join('');
-  } else {
-    kpis.forEach(k => {
-      const el = document.getElementById(k.id);
-      if (!el) return;
-      const currentText = el.textContent;
-      const currentNum = k.fmt === 'pct' ? parseFloat(currentText) / 100
-                       : k.fmt === 'money' ? parseFloat(currentText.replace(/,/g, ''))
-                       : parseInt(currentText);
-      if (!isNaN(currentNum)) {
-        animateNumber(el, currentNum, k.raw, 600, k.fmt);
-      } else {
-        el.textContent = formatKpi(k.raw, k.fmt);
+function bindDashControls() {
+  document.querySelectorAll('[data-period]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const period = btn.dataset.period;
+      const patch = { period };
+      if (period === 'month' && !dashCfg().month) {
+        const now = new Date();
+        patch.month = { year: now.getFullYear(), month: now.getMonth() };
       }
-      const card = el.closest('.kpi-card');
-      if (card) card.className = `kpi-card ${k.cls}`;
+      setDashCfg(patch);
+    });
+  });
+
+  const mes = document.getElementById('dashMonth');
+  if (mes) {
+    const now = new Date();
+    mes.innerHTML = '';
+    for (let i = 0; i < 12; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const opt = document.createElement('option');
+      opt.value = `${d.getFullYear()}-${d.getMonth()}`;
+      opt.textContent = `${CaerleonDash.MESES[d.getMonth()]} ${d.getFullYear()}`;
+      mes.appendChild(opt);
+    }
+    mes.addEventListener('change', () => {
+      const [year, month] = mes.value.split('-').map(Number);
+      setDashCfg({ month: { year, month } });
     });
   }
 
-  // Goal gauge
-  const goal = getGoalProgress();
-  const gaugeValue = document.getElementById('gaugeValue');
-  if (gaugeValue) gaugeValue.textContent = (goal.pct * 100).toFixed(1) + '%';
-  const goalInfo = document.getElementById('goalMetaInfo');
-  if (goalInfo) {
-    if (goal.pct >= 1) {
-      goalInfo.className = 'goal-meta-info over';
-      goalInfo.innerHTML = `🎉 <strong>Superaste la meta</strong> por ${fmtSilver(goal.profit - goal.goal)}`;
-    } else if (goal.remaining > 0) {
-      goalInfo.className = 'goal-meta-info';
-      goalInfo.innerHTML = `<span>${fmtSilver(goal.remaining)} restantes</span>`;
-    } else {
-      goalInfo.className = 'goal-meta-info met';
-      goalInfo.innerHTML = `<span>¡Meta alcanzada!</span>`;
-    }
+  const desde = document.getElementById('dashFrom');
+  const hasta = document.getElementById('dashTo');
+  if (desde) desde.addEventListener('change', () => setDashCfg({ from: desde.value }));
+  if (hasta) hasta.addEventListener('change', () => setDashCfg({ to: hasta.value }));
+
+  const metaAmount = document.getElementById('dashGoalAmount');
+  if (metaAmount) {
+    let timer = null;
+    metaAmount.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => setDashCfg({ goalAmount: Math.max(0, parseFloat(metaAmount.value) || 0) }), 500);
+    });
+  }
+  const metaPeriod = document.getElementById('dashGoalPeriod');
+  if (metaPeriod) metaPeriod.addEventListener('change', () => setDashCfg({ goalPeriod: metaPeriod.value }));
+
+  const editar = document.getElementById('dashEdit');
+  if (editar) {
+    editar.addEventListener('click', () => {
+      const activo = document.body.classList.toggle('dash-editing');
+      editar.classList.toggle('active', activo);
+      editar.textContent = activo ? '✓ Listo' : '⚙️ Personalizar';
+      document.getElementById('dashEditor').classList.toggle('hidden', !activo);
+      if (activo) renderDashEditor();
+    });
   }
 
-  const donutCenter = document.getElementById('donutCenterValue');
-  if (donutCenter) donutCenter.textContent = String(totalOps);
-
-  // Charts
-  if (dashboardActive) {
-    renderCompareChart();
-    renderChartStatus();
-    renderChartGauge();
-    renderChartTier();
-    renderChartTipo();
-    renderTopPerformers();
+  const restaurar = document.getElementById('dashReset');
+  if (restaurar) {
+    restaurar.addEventListener('click', () => {
+      if (!confirm('¿Volver al panel por defecto?')) return;
+      state.dashboard = { ...DASH_DEFAULT };
+      saveState();
+      updateDashboard();
+      renderDashEditor();
+      showToast('Panel restaurado', 'info');
+    });
   }
+
+}
+
+function syncDashControls(d) {
+  document.querySelectorAll('[data-period]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.period === d.cfg.period);
+  });
+  document.getElementById('dashMonthWrap').classList.toggle('hidden', d.cfg.period !== 'month');
+  document.getElementById('dashCustomWrap').classList.toggle('hidden', d.cfg.period !== 'custom');
+
+  const mes = document.getElementById('dashMonth');
+  if (mes && d.cfg.month) mes.value = `${d.cfg.month.year}-${d.cfg.month.month}`;
+
+  const desde = document.getElementById('dashFrom');
+  const hasta = document.getElementById('dashTo');
+  if (desde && d.cfg.from) desde.value = d.cfg.from;
+  if (hasta && d.cfg.to) hasta.value = d.cfg.to;
+
+  const amount = document.getElementById('dashGoalAmount');
+  if (amount && document.activeElement !== amount) amount.value = d.cfg.goalAmount;
+  const period = document.getElementById('dashGoalPeriod');
+  if (period) period.value = d.cfg.goalPeriod;
+
+  const resumen = document.getElementById('dashRangeLabel');
+  if (resumen) {
+    resumen.textContent = `${d.range.label} · ${CaerleonDash.dateKey(d.range.from)} → ${CaerleonDash.dateKey(d.range.to)} · ${d.hoy.total} operaciones`;
+  }
+}
+
+// -----------------------------------------------------
+// KPIs
+// -----------------------------------------------------
+
+function renderKpis(d) {
+  const grid = document.getElementById('kpiGrid');
+  if (!grid) return;
+
+  grid.innerHTML = d.cfg.kpis.map(id => {
+    const kpi = DASH_KPIS.find(k => k.id === id);
+    if (!kpi) return '';
+    const valor = kpi.valor(d);
+    const anterior = kpi.anterior ? kpi.anterior(d) : null;
+    const variacion = kpi.anterior ? CaerleonDash.delta(valor, anterior) : null;
+
+    return `
+      <div class="kpi-card ${kpi.cls(d)}" title="${escapeHtml(kpi.ayuda)}">
+        <span class="kpi-label">${kpi.label}</span>
+        <span class="kpi-value" id="kpi-${kpi.id}">${formatKpi(valor, kpi.fmt)}</span>
+        <span class="kpi-sub">${escapeHtml(kpi.sub ? kpi.sub(d) : '')}</span>
+        ${variacion === null ? '' : `<span class="kpi-delta ${variacion >= 0 ? 'up' : 'down'}">${variacion >= 0 ? '↑' : '↓'} ${dashPct(Math.abs(variacion))} vs período anterior</span>`}
+      </div>`;
+  }).join('');
 }
 
 function formatKpi(v, fmt) {
-  if (fmt === 'pct') return (v * 100).toFixed(1) + '%';
-  if (fmt === 'money') return Math.round(v).toLocaleString('es-ES');
+  if (fmt === 'money') return dashSilver(v);
+  if (fmt === 'pct') return dashPct(v);
   return String(Math.round(v));
 }
 
-function ensureCanvas(id) {
-  if (document.getElementById(id)) return;
-  const card = document.querySelector(`#${id}`)?.closest('.card-body');
-  if (card) card.innerHTML = `<canvas id="${id}"></canvas>`;
+// -----------------------------------------------------
+// Paneles
+// -----------------------------------------------------
+
+function renderPanels(d) {
+  const cont = document.getElementById('dashPanels');
+  if (!cont) return;
+
+  Object.keys(charts).forEach(destroyChart);
+  cont.innerHTML = d.cfg.panels.map(id => {
+    const panel = DASH_PANELS.find(p => p.id === id);
+    if (!panel) return '';
+    return `
+      <div class="chart-card dash-panel" data-panel="${panel.id}">
+        <div class="chart-header-row">
+          <div>
+            <div class="chart-title">${escapeHtml(panel.titulo)}</div>
+            <div class="chart-subtitle">${escapeHtml(panel.subtitulo)}</div>
+          </div>
+          <div class="panel-tools">
+            <button type="button" class="btn-tiny" data-move="${panel.id}|-1" title="Subir">↑</button>
+            <button type="button" class="btn-tiny" data-move="${panel.id}|1" title="Bajar">↓</button>
+            <button type="button" class="btn-tiny danger" data-hide="${panel.id}" title="Ocultar">✕</button>
+          </div>
+        </div>
+        <div class="panel-body" data-body="${panel.id}"></div>
+      </div>`;
+  }).join('');
+
+  d.cfg.panels.forEach(id => {
+    const panel = DASH_PANELS.find(p => p.id === id);
+    const body = cont.querySelector(`[data-body="${id}"]`);
+    if (panel && body) panel.render(body, d);
+  });
+
+  cont.querySelectorAll('[data-move]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const [id, dir] = btn.dataset.move.split('|');
+      moverPanel(id, Number(dir));
+    });
+  });
+  cont.querySelectorAll('[data-hide]').forEach(btn => {
+    btn.addEventListener('click', () => togglePanel(btn.dataset.hide, false));
+  });
+}
+
+function moverPanel(id, dir) {
+  const panels = [...dashCfg().panels];
+  const i = panels.indexOf(id);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= panels.length) return;
+  [panels[i], panels[j]] = [panels[j], panels[i]];
+  setDashCfg({ panels });
+  renderDashEditor();
+}
+
+function togglePanel(id, visible) {
+  const cfg = dashCfg();
+  const panels = visible
+    ? [...cfg.panels, id]
+    : cfg.panels.filter(p => p !== id);
+  setDashCfg({ panels });
+  renderDashEditor();
+}
+
+function toggleKpi(id, visible) {
+  const cfg = dashCfg();
+  const kpis = visible ? [...cfg.kpis, id] : cfg.kpis.filter(k => k !== id);
+  if (!kpis.length) {
+    showToast('Deja al menos un indicador', 'warn');
+    renderDashEditor();
+    return;
+  }
+  setDashCfg({ kpis });
+  renderDashEditor();
+}
+
+function renderDashEditor() {
+  const box = document.getElementById('dashEditor');
+  if (!box || box.classList.contains('hidden')) return;
+  const cfg = dashCfg();
+
+  box.querySelector('[data-editor="kpis"]').innerHTML = DASH_KPIS.map(k => `
+    <label class="dash-toggle">
+      <input type="checkbox" data-kpi="${k.id}" ${cfg.kpis.includes(k.id) ? 'checked' : ''}>
+      <span>${k.label}</span>
+    </label>`).join('');
+
+  box.querySelector('[data-editor="panels"]').innerHTML = DASH_PANELS.map(p => `
+    <label class="dash-toggle">
+      <input type="checkbox" data-panelcheck="${p.id}" ${cfg.panels.includes(p.id) ? 'checked' : ''}>
+      <span>${escapeHtml(p.titulo)}</span>
+    </label>`).join('');
+
+  const formato = box.querySelector('[data-editor="formato"]');
+  if (formato) {
+    formato.value = cfg.numberFormat;
+    formato.onchange = () => setDashCfg({ numberFormat: formato.value });
+  }
+
+  box.querySelectorAll('[data-kpi]').forEach(input => {
+    input.addEventListener('change', () => toggleKpi(input.dataset.kpi, input.checked));
+  });
+  box.querySelectorAll('[data-panelcheck]').forEach(input => {
+    input.addEventListener('change', () => togglePanel(input.dataset.panelcheck, input.checked));
+  });
+}
+
+// -----------------------------------------------------
+// Utilidades de gráficos
+// -----------------------------------------------------
+
+function getCss(varName) {
+  return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+}
+
+function hexToRgba(hex, alpha) {
+  const h = hex.replace('#', '');
+  const full = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
+  const n = parseInt(full, 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 }
 
 function destroyChart(name) {
@@ -1595,103 +1907,350 @@ function destroyChart(name) {
   }
 }
 
-function getChartColors() {
-  return getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#d4a548';
+function canvasEn(body, id, alto = 260) {
+  body.innerHTML = `<div class="chart-box" style="height:${alto}px"><canvas id="${id}"></canvas></div>`;
+  return document.getElementById(id);
 }
 
-// Chart.js animation config — matches emil-design tokens
-const CHART_ANIM = {
-  duration: 600,
-  easing: 'easeOutQuart',  // similar to cubic-bezier(0.23, 1, 0.32, 1)
-  delay: ctx => ctx.type === 'data' ? 80 : 0,
-};
+function ejes({ moneda = true } = {}) {
+  return {
+    x: {
+      ticks: { color: getCss('--chart-text'), font: { size: 10 } },
+      grid: { display: false },
+    },
+    y: {
+      ticks: {
+        color: getCss('--chart-text'),
+        font: { size: 10 },
+        callback: v => moneda ? dashSilver(v) : v,
+      },
+      grid: { color: getCss('--chart-grid') },
+      border: { display: false },
+    },
+  };
+}
 
-function renderChartTime() {
-  destroyChart('time');
-  ensureCanvas('chartTime');
-  const reg = [...getFilteredRegistro()].sort((a,b) => (a.fecha || '').localeCompare(b.fecha || ''));
-  const ctx = document.getElementById('chartTime');
-  if (!ctx || reg.length === 0) return;
-  const accent = getChartColors();
-  charts.time = new Chart(ctx, {
+function tooltipMoneda(extra = {}) {
+  return {
+    backgroundColor: getCss('--bg-card'),
+    titleColor: getCss('--text-primary'),
+    bodyColor: getCss('--text-secondary'),
+    borderColor: getCss('--border'),
+    borderWidth: 1,
+    padding: 10,
+    displayColors: true,
+    callbacks: {
+      label: ctx => ` ${ctx.dataset.label}: ${dashSilver(ctx.parsed.y ?? ctx.parsed.x ?? ctx.parsed, 'completo')}`,
+      ...extra,
+    },
+  };
+}
+
+function sinDatos(body, texto) {
+  body.innerHTML = `<p class="dash-empty">${escapeHtml(texto)}</p>`;
+}
+
+// -----------------------------------------------------
+// Paneles: implementaciones
+// -----------------------------------------------------
+
+function renderPanelDia(body, d) {
+  const serie = CaerleonDash.dailySeries(d.ops, d.range, d.prev, DASH_HELPERS);
+  if (!serie.dias) return sinDatos(body, 'Sin días en este período.');
+
+  const totalActual = serie.actual.reduce((a, b) => a + b, 0);
+  const totalAnterior = serie.anterior.reduce((a, b) => a + b, 0);
+  const variacion = CaerleonDash.delta(totalActual, totalAnterior);
+
+  body.innerHTML = `
+    <div class="panel-note">
+      ${variacion === null
+        ? 'Sin datos del período anterior para comparar.'
+        : `<span class="chart-trend-pill ${variacion >= 0 ? 'up' : 'down'}">${variacion >= 0 ? '↑' : '↓'} ${dashPct(Math.abs(variacion))} vs período anterior</span>
+           <span class="muted">${dashSilver(totalActual)} frente a ${dashSilver(totalAnterior)}</span>`}
+    </div>
+    <div class="chart-box" style="height:260px"><canvas id="chartDia"></canvas></div>`;
+
+  const verde = getCss('--success');
+  charts.dia = new Chart(document.getElementById('chartDia'), {
+    type: 'bar',
+    data: {
+      labels: serie.labels,
+      datasets: [
+        {
+          label: 'Período anterior',
+          data: serie.anterior,
+          backgroundColor: hexToRgba(getCss('--text-muted') || '#9ca3af', 0.35),
+          borderRadius: 4,
+          borderSkipped: false,
+        },
+        {
+          label: 'Este período',
+          data: serie.actual,
+          backgroundColor: serie.actual.map(v => v >= 0 ? verde : getCss('--danger')),
+          borderRadius: 4,
+          borderSkipped: false,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: CHART_ANIM,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: true, position: 'bottom', labels: { color: getCss('--chart-text'), boxWidth: 10, usePointStyle: true } },
+        tooltip: tooltipMoneda(),
+      },
+      scales: ejes(),
+    },
+  });
+}
+
+function renderPanelAcumulado(body, d) {
+  const serie = CaerleonDash.dailySeries(d.ops, d.range, d.prev, DASH_HELPERS);
+  const acumulado = CaerleonDash.cumulativeSeries(serie);
+  if (!acumulado.length) return sinDatos(body, 'Sin operaciones en este período.');
+
+  const canvas = canvasEn(body, 'chartAcumulado', 260);
+  const accent = getCss('--accent');
+  const mismaMeta = d.cfg.goalPeriod === d.cfg.period;
+
+  const datasets = [{
+    label: 'Acumulado',
+    data: acumulado,
+    borderColor: accent,
+    backgroundColor: hexToRgba(accent, 0.15),
+    borderWidth: 2,
+    pointRadius: 0,
+    pointHoverRadius: 5,
+    fill: true,
+    tension: 0.25,
+  }];
+
+  if (mismaMeta && d.cfg.goalAmount > 0) {
+    datasets.push({
+      label: 'Meta',
+      data: acumulado.map(() => d.cfg.goalAmount),
+      borderColor: getCss('--warning'),
+      borderWidth: 2,
+      borderDash: [6, 4],
+      pointRadius: 0,
+      fill: false,
+    });
+  }
+
+  charts.acumulado = new Chart(canvas, {
+    type: 'line',
+    data: { labels: serie.labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: CHART_ANIM,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: datasets.length > 1, position: 'bottom', labels: { color: getCss('--chart-text'), boxWidth: 10, usePointStyle: true } },
+        tooltip: tooltipMoneda(),
+      },
+      scales: ejes(),
+    },
+  });
+}
+
+function renderPanelFlujo(body, d) {
+  const s = CaerleonDash.flowSeries(d.ops, d.range, DASH_HELPERS);
+  if (!s.dias) return sinDatos(body, 'Sin días en este período.');
+
+  const totalInv = s.inversion.reduce((a, b) => a + b, 0);
+  const totalVenta = s.venta.reduce((a, b) => a + b, 0);
+  const totalGan = s.ganancia.reduce((a, b) => a + b, 0);
+  if (totalVenta === 0) return sinDatos(body, 'Sin ventas cerradas en este período.');
+
+  body.innerHTML = `
+    <div class="panel-note">
+      <span class="muted">Invertiste ${dashSilver(totalInv)} · el Mercado Negro pagó ${dashSilver(totalVenta)} ·
+      te quedaron ${dashSilver(totalGan)} (la diferencia es tu costo más el ${(d.opts.taxRate * 100).toFixed(0)}% de impuesto)</span>
+    </div>
+    <div class="chart-box" style="height:280px"><canvas id="chartFlujo"></canvas></div>`;
+
+  // Tres series distintas: colores validados para daltonismo, con leyenda
+  const linea = (label, data, color) => ({
+    label,
+    data,
+    borderColor: color,
+    backgroundColor: color,
+    borderWidth: 2,
+    pointRadius: 0,
+    pointHoverRadius: 5,
+    tension: 0.25,
+    fill: false,
+  });
+
+  charts.flujo = new Chart(document.getElementById('chartFlujo'), {
     type: 'line',
     data: {
-      labels: reg.map(r => r.fecha),
+      labels: s.labels,
+      datasets: [
+        linea('Inversión', s.inversion, getCss('--warning')),
+        linea('Venta (Mercado Negro)', s.venta, getCss('--info')),
+        linea('Ganancia', s.ganancia, getCss('--success')),
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: CHART_ANIM,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: true, position: 'bottom', labels: { color: getCss('--chart-text'), boxWidth: 10, usePointStyle: true } },
+        tooltip: tooltipMoneda(),
+      },
+      scales: ejes(),
+    },
+  });
+}
+
+function renderPanelHoras(body, d) {
+  const s = CaerleonDash.hourSeries(d.ops, DASH_HELPERS);
+  if (!s.total) return sinDatos(body, 'Sin ventas cerradas en este período.');
+
+  const aviso = s.migradas > 0
+    ? `<span class="muted">Ojo: ${s.migradas} de ${s.total} ventas vienen de la importación y quedaron todas a las 12:00.</span>`
+    : `<span class="muted">${s.total} ventas con hora registrada.</span>`;
+
+  body.innerHTML = `<div class="panel-note">${aviso}</div>
+    <div class="chart-box" style="height:240px"><canvas id="chartHoras"></canvas></div>`;
+
+  charts.horas = new Chart(document.getElementById('chartHoras'), {
+    type: 'bar',
+    data: {
+      labels: s.labels,
       datasets: [{
-        label: 'Profit',
-        data: reg.map(r => r.profit),
-        borderColor: accent,
-        backgroundColor: ctx => {
-          const c = ctx.chart.ctx;
-          const gradient = c.createLinearGradient(0, 0, 0, 280);
-          gradient.addColorStop(0, hexToRgba(accent, 0.35));
-          gradient.addColorStop(1, hexToRgba(accent, 0));
-          return gradient;
-        },
-        fill: true,
-        tension: 0.4,
-        borderWidth: 2,
-        pointRadius: 0,
-        pointHoverRadius: 5,
-        pointHoverBackgroundColor: accent,
-        pointHoverBorderColor: '#fff',
-        pointHoverBorderWidth: 2,
+        label: 'Ganancia',
+        data: s.profit,
+        backgroundColor: s.profit.map(v => v >= 0 ? getCss('--accent') : getCss('--danger')),
+        borderRadius: 4,
+        borderSkipped: false,
       }],
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
       animation: CHART_ANIM,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { ticks: { color: getCss('--chart-text'), font: { size: 10 } }, grid: { display: false } },
-        y: { ticks: { color: getCss('--chart-text'), font: { size: 10 } }, grid: { color: getCss('--chart-grid') }, border: { display: false } },
+      plugins: {
+        legend: { display: false },
+        tooltip: tooltipMoneda({
+          afterLabel: ctx => `  ${s.ventas[ctx.dataIndex]} venta${s.ventas[ctx.dataIndex] === 1 ? '' : 's'}`,
+        }),
       },
+      scales: ejes(),
     },
   });
 }
 
-function hexToRgba(hex, alpha) {
-  const c = hex.replace('#', '');
-  const r = parseInt(c.substring(0, 2), 16);
-  const g = parseInt(c.substring(2, 4), 16);
-  const b = parseInt(c.substring(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
+function renderPanelMeta(body, d) {
+  const m = d.meta;
+  const pctTexto = dashPct(m.pct);
+  const canvasId = 'chartMeta';
 
-function getCss(varName) {
-  return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
-}
+  body.innerHTML = `
+    <div class="meta-layout">
+      <div class="gauge-wrapper">
+        <div class="chart-box" style="height:180px"><canvas id="${canvasId}"></canvas></div>
+        <div class="gauge-center">
+          <div class="gauge-value">${pctTexto}</div>
+          <div class="gauge-label">de la meta ${escapeHtml(m.range.label)}</div>
+        </div>
+      </div>
+      <div class="meta-datos">
+        <div class="meta-row"><span>Llevas</span><strong>${dashSilver(m.logrado)}</strong></div>
+        <div class="meta-row"><span>Meta</span><strong>${dashSilver(m.goal)}</strong></div>
+        <div class="meta-row"><span>${m.cumplida ? 'De sobra' : 'Te falta'}</span>
+          <strong class="${m.cumplida ? 'pos' : 'neg'}">${dashSilver(m.cumplida ? m.logrado - m.goal : m.falta)}</strong></div>
+        <div class="meta-row"><span>Días restantes</span><strong>${m.diasRestantes}</strong></div>
+        ${m.cumplida
+          ? '<div class="meta-row destacado">🎉 Meta cumplida</div>'
+          : `<div class="meta-row"><span>Ritmo necesario</span><strong>${dashSilver(m.ritmoNecesario)} / día</strong></div>`}
+        <div class="meta-row"><span>A este ritmo terminas en</span><strong>${dashSilver(m.proyeccion)}</strong></div>
+      </div>
+    </div>`;
 
-// Sparkline removed
+  const logrado = Math.max(0, Math.min(m.goal, m.logrado));
+  const resto = Math.max(0, m.goal - m.logrado);
+  const color = m.cumplida ? getCss('--success') : getCss('--accent');
 
-function renderChartStatus() {
-  destroyChart('status');
-  ensureCanvas('chartStatus');
-  const ctx = document.getElementById('chartStatus');
-  if (!ctx) return;
-  const counts = {};
-  getFilteredRegistro().forEach(r => {
-    counts[r.estado] = (counts[r.estado] || 0) + 1;
-  });
-  const keys = Object.keys(counts);
-  if (keys.length === 0) return;
-
-  const statusColors = {
-    '🟢 Excelente': getCss('--excelente'),
-    '🟡 Buena':      getCss('--buena'),
-    '🔵 Bulk Win':  getCss('--bulk'),
-    '🟠 Marginal':   getCss('--marginal'),
-    '🔴 Pérdida':    getCss('--perdida'),
-  };
-  const colors = keys.map(k => statusColors[k] || getCss('--accent'));
-
-  charts.status = new Chart(ctx, {
+  charts.meta = new Chart(document.getElementById(canvasId), {
     type: 'doughnut',
     data: {
-      labels: keys,
+      labels: ['Logrado', 'Falta'],
       datasets: [{
-        data: Object.values(counts),
+        data: m.goal > 0 ? [logrado, resto] : [0, 1],
+        backgroundColor: [color, hexToRgba(getCss('--text-muted') || '#9ca3af', 0.2)],
+        borderWidth: 0,
+        circumference: 180,
+        rotation: 270,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '72%',
+      animation: CHART_ANIM,
+      plugins: { legend: { display: false }, tooltip: tooltipMoneda() },
+    },
+  });
+}
+
+function renderPanelEstado(body, d) {
+  const counts = {};
+  d.ops.forEach(r => {
+    const clave = r.estado || 'Sin estado';
+    counts[clave] = (counts[clave] || 0) + 1;
+  });
+  // Los estados son una escala: se muestran siempre en el mismo orden,
+  // del mejor al peor, y lo desconocido al final.
+  const ORDEN_ESTADOS = ['🟢 Excelente', '🟡 Buena', '🔵 Bulk Win', '🟠 Marginal', '🔴 Pérdida'];
+  const keys = Object.keys(counts).sort((x, y) => {
+    const ix = ORDEN_ESTADOS.indexOf(x), iy = ORDEN_ESTADOS.indexOf(y);
+    return (ix < 0 ? 99 : ix) - (iy < 0 ? 99 : iy);
+  });
+  if (!keys.length) return sinDatos(body, 'Sin operaciones en este período.');
+
+  // Cada estado tiene su color; "Sin histórico" va en gris (antes usaba el
+  // mismo morado que "Bulk Win", así que no se distinguían)
+  const colores = {
+    '🟢 Excelente': getCss('--excelente'),
+    '🟡 Buena': getCss('--buena'),
+    '🔵 Bulk Win': getCss('--bulk'),
+    '🟠 Marginal': getCss('--marginal'),
+    '🔴 Pérdida': getCss('--perdida'),
+  };
+  const gris = getCss('--text-muted') || '#9ca3af';
+  const colors = keys.map(k => colores[k] || gris);
+  const total = keys.reduce((s, k) => s + counts[k], 0);
+
+  body.innerHTML = `
+    <div class="donut-wrapper">
+      <div class="chart-box" style="height:200px"><canvas id="chartEstado"></canvas></div>
+      <div class="donut-center">
+        <div class="donut-center-value">${total}</div>
+        <div class="donut-center-label">Operaciones</div>
+      </div>
+    </div>
+    <div class="donut-legend">
+      ${keys.map((k, i) => `
+        <div class="donut-legend-item">
+          <div class="label"><span class="dot" style="background:${colors[i]}"></span>${escapeHtml(String(k).replace(/^\p{Extended_Pictographic}\s*/u, ''))}</div>
+          <div class="value">${counts[k]} <span class="muted">(${dashPct(counts[k] / total)})</span></div>
+        </div>`).join('')}
+    </div>`;
+
+  charts.estado = new Chart(document.getElementById('chartEstado'), {
+    type: 'doughnut',
+    data: {
+      labels: keys.map(k => String(k).replace(/^\p{Extended_Pictographic}\s*/u, '')),
+      datasets: [{
+        data: keys.map(k => counts[k]),
         backgroundColor: colors,
         borderColor: getCss('--bg-card'),
         borderWidth: 2,
@@ -1702,266 +2261,171 @@ function renderChartStatus() {
       maintainAspectRatio: false,
       cutout: '68%',
       animation: CHART_ANIM,
-      plugins: { legend: { display: false }, tooltip: { enabled: true } },
-    },
-  });
-
-  const legend = document.getElementById('donutLegend');
-  if (legend) {
-    legend.innerHTML = keys.map((k, i) => {
-      const v = counts[k];
-      return `<div class="donut-legend-item">
-        <div class="label"><span class="dot" style="background:${colors[i]}"></span>${escapeHtml(String(k).replace(/^\p{Extended_Pictographic}\s*/u, ''))}</div>
-        <div class="value">${v}</div>
-      </div>`;
-    }).join('');
-  }
-}
-
-// Gauge (semicircle) for goal progress
-function renderChartGauge() {
-  destroyChart('gauge');
-  ensureCanvas('chartGauge');
-  const ctx = document.getElementById('chartGauge');
-  if (!ctx) return;
-  const goal = getGoalProgress();
-  const pct = Math.min(goal.pct, 1);
-  const rest = 1 - pct;
-  const reached = goal.pct >= 1;
-  const accent = reached ? getCss('--success') : getCss('--accent');
-  const empty = getCss('--border');
-
-  charts.gauge = new Chart(ctx, {
-    type: 'doughnut',
-    data: {
-      labels: ['Alcanzado', 'Restante'],
-      datasets: [{
-        data: [pct, rest],
-        backgroundColor: [accent, empty],
-        borderColor: 'transparent',
-        borderWidth: 0,
-        circumference: 180,
-        rotation: 270,
-      }],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      cutout: '78%',
-      animation: CHART_ANIM,
-      plugins: { legend: { display: false }, tooltip: { enabled: false } },
-    },
-  });
-}
-
-// Top performers list (filtered by period)
-function renderTopPerformers() {
-  const list = document.getElementById('performerList');
-  if (!list) return;
-  const sorted = [...getFilteredRegistro()].sort((a, b) => b.profit - a.profit).slice(0, 5);
-  if (sorted.length === 0) {
-    list.innerHTML = '<div style="text-align:center; padding:2rem; color:var(--text-secondary);">Sin operaciones en este período</div>';
-    return;
-  }
-  list.innerHTML = sorted.map((r, i) => {
-    const isPositive = r.profit >= 0;
-    const baseId = getBaseItemId(r.tipo);
-    return `
-      <div class="performer-item">
-        <div class="performer-rank">${i + 1}</div>
-        <img class="performer-icon" src="${imgUrl(r.icon || tierItemId(baseId, r.tier))}" alt="">
-        <div class="performer-info">
-          <div class="performer-name">${escapeHtml(opDisplayName(r))} T${r.tier}${r.royalSlot ? '' : '.' + r.enchFin}</div>
-          <div class="performer-meta">${r.qty}× · ${r.fecha}</div>
-        </div>
-        <div class="performer-value ${isPositive ? 'positive' : 'negative'}">
-          ${isPositive ? '+' : ''}${fmtSilver(r.profit)}
-        </div>
-      </div>
-    `;
-  }).join('');
-}
-
-function getBaseItemId(tipo) {
-  const t = TIPOS_OBJETO.find(x => x.nombre === tipo);
-  return t ? t.baseId : 'RUNE';
-}
-
-// Comparative chart: current period vs previous period, daily breakdown
-function renderCompareChart() {
-  destroyChart('compare');
-  ensureCanvas('chartCompare');
-  const ctx = document.getElementById('chartCompare');
-  if (!ctx) return;
-
-  const cur = getPeriodRange();
-  const prev = getPreviousPeriodRange();
-  if (!cur || !prev) return;
-
-  const days = Math.round((cur.to - cur.from) / (1000 * 60 * 60 * 24)) + 1;
-  const labels = [];
-  const curData = [];
-  const prevData = [];
-
-  for (let i = 0; i < days; i++) {
-    const curDate = new Date(cur.from);
-    curDate.setDate(cur.from.getDate() + i);
-    const prevDate = new Date(prev.from);
-    prevDate.setDate(prev.from.getDate() + i);
-
-    labels.push(`${curDate.getDate()}/${curDate.getMonth() + 1}`);
-
-    const curDayProfit = state.registro
-      .filter(r => r.fecha === formatDate(curDate))
-      .reduce((s, r) => s + r.profit, 0);
-    const prevDayProfit = state.registro
-      .filter(r => r.fecha === formatDate(prevDate))
-      .reduce((s, r) => s + r.profit, 0);
-
-    curData.push(curDayProfit);
-    prevData.push(prevDayProfit);
-  }
-
-  const curTotal = curData.reduce((a, b) => a + b, 0);
-  const prevTotal = prevData.reduce((a, b) => a + b, 0);
-  const trendPct = prevTotal !== 0 ? ((curTotal - prevTotal) / Math.abs(prevTotal)) * 100 : null;
-  const trendEl = document.getElementById('compareTrend');
-  if (trendEl) {
-    if (trendPct === null) {
-      trendEl.textContent = 'Sin datos anteriores';
-      trendEl.className = 'chart-trend-pill neutral';
-    } else {
-      const arrow = trendPct > 0 ? '↑' : (trendPct < 0 ? '↓' : '·');
-      trendEl.textContent = `${arrow} ${Math.abs(trendPct).toFixed(1)}% vs período anterior`;
-      trendEl.className = trendPct > 0 ? 'chart-trend-pill up' : (trendPct < 0 ? 'chart-trend-pill down' : 'chart-trend-pill neutral');
-    }
-  }
-
-  const accent = getCss('--success');
-  const muted = getCss('--text-muted');
-
-  charts.compare = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [
-        {
-          label: 'Período actual',
-          data: curData,
-          backgroundColor: accent,
-          borderRadius: 4,
-          borderSkipped: false,
-        },
-        {
-          label: 'Período anterior',
-          data: prevData,
-          backgroundColor: hexToRgba(muted, 0.3),
-          borderRadius: 4,
-          borderSkipped: false,
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: CHART_ANIM,
       plugins: {
         legend: { display: false },
-        tooltip: { mode: 'index', intersect: false },
-      },
-      scales: {
-        x: {
-          ticks: { color: getCss('--chart-text'), font: { size: 10 } },
-          grid: { display: false },
-        },
-        y: {
-          ticks: { color: getCss('--chart-text'), font: { size: 10 } },
-          grid: { color: getCss('--chart-grid') },
-          border: { display: false },
+        tooltip: {
+          backgroundColor: getCss('--bg-card'),
+          titleColor: getCss('--text-primary'),
+          bodyColor: getCss('--text-secondary'),
+          borderColor: getCss('--border'),
+          borderWidth: 1,
+          callbacks: { label: ctx => ` ${ctx.parsed} operaciones (${dashPct(ctx.parsed / total)})` },
         },
       },
     },
   });
 }
 
-function formatDate(d) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+function renderPanelInventario(body, d) {
+  const items = CaerleonDash.inventory(state.registro, { ...DASH_HELPERS, taxRate: dashTaxRate(), now: d.now });
+  if (!items.length) {
+    return sinDatos(body, 'No tienes operaciones sin vender. Cuando guardes una operación y todavía no la vendas, aparecerá aquí.');
+  }
+
+  const costo = items.reduce((s, i) => s + i.costo, 0);
+  const potencial = items.reduce((s, i) => s + i.potencial, 0);
+
+  body.innerHTML = `
+    <div class="panel-note">
+      <span class="muted">${items.length} sin vender · ${dashSilver(costo)} invertidos · ${dashSilver(potencial)} por cobrar si vendes al precio anotado</span>
+    </div>
+    <div class="table-scroll">
+      <table class="data-table inventario-table">
+        <thead>
+          <tr><th>Item</th><th>Estado</th><th>Días</th><th>Costo</th><th>Por cobrar</th></tr>
+        </thead>
+        <tbody>
+          ${items.map(i => `
+            <tr>
+              <td><img class="mat-icon-sm" src="${imgUrl(i.op.icon || getItemId(i.op.tipo, i.op.tier))}" alt="">
+                  ${escapeHtml(opDisplayName(i.op))} <span class="muted">T${i.op.tier}${i.op.royalSlot ? '' : '.' + i.op.enchFin}</span></td>
+              <td><span class="status-badge status-${i.estado}">${i.estado === 'pendiente' ? '⏳ En venta' : '⚪ Crafteado'}</span></td>
+              <td>${i.dias}</td>
+              <td>${dashSilver(i.costo)}</td>
+              <td class="${i.potencial >= 0 ? 'pos' : 'neg'}">${dashSilver(i.potencial)}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
 }
 
-function renderChartTipo() {
-  destroyChart('tipo');
-  ensureCanvas('chartTipo');
-  const ctx = document.getElementById('chartTipo');
-  if (!ctx) return;
-  const sums = {};
-  getFilteredRegistro().forEach(r => {
-    sums[r.tipo] = (sums[r.tipo] || 0) + r.profit;
-  });
-  const tipos = Object.keys(sums);
-  if (tipos.length === 0) return;
-  charts.tipo = new Chart(ctx, {
+function renderPanelTier(body, d) {
+  const filas = CaerleonDash.groupBy(d.ops, o => 'T' + o.tier, DASH_HELPERS)
+    .sort((a, b) => a.key.localeCompare(b.key));
+  if (!filas.length) return sinDatos(body, 'Sin operaciones en este período.');
+
+  const canvas = canvasEn(body, 'chartTier', 240);
+  const verde = getCss('--success');
+  charts.tier = new Chart(canvas, {
     type: 'bar',
     data: {
-      labels: tipos,
+      labels: filas.map(f => f.key),
       datasets: [{
-        label: 'Profit',
-        data: tipos.map(t => sums[t]),
-        backgroundColor: tipos.map(t => sums[t] >= 0 ? getCss('--success') : getCss('--danger')),
-        borderRadius: 6,
+        label: 'Profit realizado',
+        data: filas.map(f => f.profit),
+        backgroundColor: filas.map(f => f.profit >= 0 ? verde : getCss('--danger')),
+        borderRadius: 4,
         borderSkipped: false,
       }],
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      indexAxis: 'y',
       animation: CHART_ANIM,
-      plugins: { legend: { display: false } },
+      plugins: { legend: { display: false }, tooltip: tooltipMoneda() },
+      scales: ejes(),
+    },
+  });
+}
+
+function renderPanelTipo(body, d) {
+  const filas = CaerleonDash.groupBy(d.ops, o => opDisplayName(o), DASH_HELPERS).slice(0, 8);
+  if (!filas.length) return sinDatos(body, 'Sin operaciones en este período.');
+
+  const canvas = canvasEn(body, 'chartTipo', Math.max(160, filas.length * 42));
+  const verde = getCss('--success');
+  charts.tipo = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: filas.map(f => f.key),
+      datasets: [{
+        label: 'Profit realizado',
+        data: filas.map(f => f.profit),
+        backgroundColor: filas.map(f => f.profit >= 0 ? verde : getCss('--danger')),
+        borderRadius: 4,
+        borderSkipped: false,
+      }],
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: CHART_ANIM,
+      plugins: { legend: { display: false }, tooltip: tooltipMoneda() },
       scales: {
-        x: { ticks: { color: getCss('--chart-text'), font: { size: 10 } }, grid: { color: getCss('--chart-grid') }, border: { display: false } },
+        x: {
+          ticks: { color: getCss('--chart-text'), font: { size: 10 }, callback: v => dashSilver(v) },
+          grid: { color: getCss('--chart-grid') },
+          border: { display: false },
+        },
         y: { ticks: { color: getCss('--chart-text'), font: { size: 11 } }, grid: { display: false } },
       },
     },
   });
 }
 
-function renderChartTier() {
-  destroyChart('tier');
-  ensureCanvas('chartTier');
-  const ctx = document.getElementById('chartTier');
-  if (!ctx) return;
-  const sums = {};
-  getFilteredRegistro().forEach(r => {
-    sums[r.tier] = (sums[r.tier] || 0) + r.profit;
-  });
-  const tiers = Object.keys(sums).sort();
-  if (tiers.length === 0) return;
-  charts.tier = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels: tiers.map(t => `T${t}`),
-      datasets: [{
-        label: 'Profit',
-        data: tiers.map(t => sums[t]),
-        backgroundColor: tiers.map(t => sums[t] >= 0 ? getCss('--success') : getCss('--danger')),
-        borderRadius: 6,
-        borderSkipped: false,
-      }],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: CHART_ANIM,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { ticks: { color: getCss('--chart-text'), font: { size: 11 } }, grid: { display: false } },
-        y: { ticks: { color: getCss('--chart-text'), font: { size: 10 } }, grid: { color: getCss('--chart-grid') }, border: { display: false } },
-      },
-    },
-  });
+function renderPanelRentabilidad(body, d) {
+  const filas = CaerleonDash.groupBy(d.ops, o => `${opDisplayName(o)}|T${o.tier}`, DASH_HELPERS);
+  if (!filas.length) return sinDatos(body, 'Sin operaciones en este período.');
+
+  body.innerHTML = `
+    <div class="table-scroll">
+      <table class="data-table rentabilidad-table">
+        <thead>
+          <tr><th>Item</th><th>Tier</th><th>Ops</th><th>Vendidas</th><th>Inversión</th><th>Profit</th><th>ROI</th></tr>
+        </thead>
+        <tbody>
+          ${filas.map(f => {
+            const [nombre, tier] = f.key.split('|');
+            return `
+            <tr>
+              <td>${escapeHtml(nombre)}</td>
+              <td>${escapeHtml(tier)}</td>
+              <td>${f.operaciones}</td>
+              <td>${f.vendidas}</td>
+              <td>${dashSilver(f.inversion)}</td>
+              <td class="${f.profit >= 0 ? 'pos' : 'neg'}">${dashSilver(f.profit)}</td>
+              <td class="${f.roi >= 0 ? 'pos' : 'neg'}">${dashPct(f.roi)}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
 }
 
-// renderChartEnch removed — replaced by gauge chart
+function renderPanelTop(body, d) {
+  const top = CaerleonDash.topOperations(d.ops, DASH_HELPERS, 5);
+  if (!top.length) return sinDatos(body, 'Sin ventas en este período.');
+
+  body.innerHTML = `
+    <div class="performer-list">
+      ${top.map((t, i) => `
+        <div class="performer-item">
+          <div class="performer-rank">${i + 1}</div>
+          <img class="performer-icon" src="${imgUrl(t.op.icon || tierItemId(getBaseItemId(t.op.tipo), t.op.tier))}" alt="">
+          <div class="performer-info">
+            <div class="performer-name">${escapeHtml(opDisplayName(t.op))} T${t.op.tier}${t.op.royalSlot ? '' : '.' + t.op.enchFin}</div>
+            <div class="performer-meta">${t.op.qty}× · ${escapeHtml(t.op.fecha || '')}</div>
+          </div>
+          <div class="performer-value ${t.profit >= 0 ? 'positive' : 'negative'}">${t.profit >= 0 ? '+' : ''}${dashSilver(t.profit)}</div>
+        </div>`).join('')}
+    </div>`;
+}
+
+function getBaseItemId(tipo) {
+  const t = TIPOS_OBJETO.find(x => x.nombre === tipo);
+  return t ? t.baseId : 'RUNE';
+}
 
 // =====================================================
 // UI - SETTINGS
@@ -1976,72 +2440,7 @@ function initSettings() {
   const btnRestore = document.getElementById('btnRestoreBackup');
   if (btnRestore) btnRestore.addEventListener('click', handleRestoreBackup);
 
-  // Dashboard period/goal controls
-  populateMonthSelect();
-  setupDashboardControls();
   updateStorageInfo();
-}
-
-function setupDashboardControls() {
-  document.getElementById('dashPeriod').addEventListener('change', e => {
-    dashFilters.period = e.target.value;
-    togglePeriodExtras();
-    updateDashboard();
-  });
-  document.getElementById('dashMonthSelect').addEventListener('change', e => {
-    const [y, m] = e.target.value.split('-').map(Number);
-    dashFilters.month = { year: y, month: m - 1 };
-    updateDashboard();
-  });
-  document.getElementById('dashDateFrom').addEventListener('change', e => {
-    dashFilters.customFrom = e.target.value;
-    updateDashboard();
-  });
-  document.getElementById('dashDateTo').addEventListener('change', e => {
-    dashFilters.customTo = e.target.value;
-    updateDashboard();
-  });
-  document.getElementById('dashGoalAmount').addEventListener('input', e => {
-    dashFilters.goalAmount = parseFloat(e.target.value) || 0;
-    updateDashboard();
-  });
-  document.getElementById('dashGoalPeriod').addEventListener('change', e => {
-    dashFilters.goalPeriod = e.target.value;
-    const defaults = { day: 100000, week: 500000, month: 1000000 };
-    const el = document.getElementById('dashGoalAmount');
-    if (el && (el.value === '' || parseFloat(el.value) === 0)) {
-      el.value = defaults[e.target.value];
-      dashFilters.goalAmount = defaults[e.target.value];
-    }
-    updateDashboard();
-  });
-  togglePeriodExtras();
-}
-
-function togglePeriodExtras() {
-  const period = dashFilters.period;
-  const customBox = document.getElementById('periodCustom');
-  const monthSel = document.getElementById('dashMonthSelect');
-  customBox.classList.toggle('hidden', period !== 'custom');
-  monthSel.classList.toggle('hidden', period !== 'month');
-}
-
-function populateMonthSelect() {
-  const sel = document.getElementById('dashMonthSelect');
-  const monthNames = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
-  const now = new Date();
-  // Show last 12 months
-  sel.innerHTML = '';
-  for (let i = 0; i < 12; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const opt = document.createElement('option');
-    opt.value = `${d.getFullYear()}-${d.getMonth() + 1}`;
-    opt.textContent = `${monthNames[d.getMonth()]} ${d.getFullYear()}`;
-    if (i === 0) opt.selected = true;
-    sel.appendChild(opt);
-  }
-  // Default to current month
-  dashFilters.month = { year: now.getFullYear(), month: now.getMonth() };
 }
 
 function updateStorageInfo() {
@@ -2122,6 +2521,7 @@ function borrarTodo() {
     registro: [],
     theme: state.theme,
     premium: state.premium,
+    dashboard: state.dashboard || null,
   };
   saveState();
   initPrecios();

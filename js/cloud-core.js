@@ -212,7 +212,7 @@
    * Cada tabla es un Map clave -> JSON de la fila completa, así comparar dos
    * fotos es comparar strings.
    */
-  function snapshot(appState, userId, ordenOf) {
+  function snapshot(appState, userId, ordenOf, opts = {}) {
     const ops = new Map();
     const sales = new Map();
 
@@ -242,6 +242,7 @@
         user_id: userId,
         premium: appState.premium !== false,
         theme: appState.theme === 'dark' ? 'dark' : 'light',
+        ...(opts.withDashboard === false ? {} : { dashboard: appState.dashboard ?? null }),
       })],
     ]);
 
@@ -301,6 +302,9 @@
       this.orden = new Map();      // id de operación -> orden de inserción
       this.nextOrden = 1;
       this.baseline = null;        // lo que sabemos que está en la nube
+      // ¿La tabla profiles tiene la columna del panel? (migración de v7)
+      // Si falta, la app funciona igual pero el panel no se sincroniza.
+      this.soportaDashboard = true;
       this.queue = Promise.resolve(); // guardados encadenados
       this.channel = null;
     }
@@ -361,6 +365,7 @@
       for (const r of sigilRows) sellos[r.tier] = r.price;
 
       const profile = profileRows[0] || null;
+      if (profile) this.soportaDashboard = Object.prototype.hasOwnProperty.call(profile, 'dashboard');
 
       return {
         registro,
@@ -368,6 +373,7 @@
         sellos,
         premium: profile ? profile.premium : undefined,
         theme: profile ? profile.theme : undefined,
+        dashboard: profile ? (profile.dashboard ?? null) : null,
         hasProfile: !!profile,
         ordenes,
       };
@@ -380,7 +386,7 @@
      */
     remoteSnapshot(remote, ordenes) {
       const ord = new Map(ordenes || remote.ordenes);
-      const s = snapshot(remote, this.userId, (id) => ord.get(id));
+      const s = snapshot(remote, this.userId, (id) => ord.get(id), { withDashboard: this.soportaDashboard });
       for (const key of [...s.prices.keys()]) {
         if (!(key in remote.precios)) s.prices.delete(key);
       }
@@ -399,7 +405,7 @@
     }
 
     currentSnapshot(appState) {
-      return snapshot(appState, this.userId, (id) => this.ordenOf(id));
+      return snapshot(appState, this.userId, (id) => this.ordenOf(id), { withDashboard: this.soportaDashboard });
     }
 
     hasPending(appState) {

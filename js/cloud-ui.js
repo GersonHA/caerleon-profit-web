@@ -142,6 +142,7 @@
       precios,
       sellos: { ...base.sellos, ...remote.sellos },
       registro: remote.registro,
+      dashboard: remote.dashboard ?? current.dashboard ?? null,
       theme: remote.theme || current.theme || 'light',
       premium: remote.premium !== undefined ? remote.premium
         : (current.premium !== undefined ? current.premium : true),
@@ -180,6 +181,7 @@
         precios: local.precios,
         sellos: local.sellos,
         registro: App().normalize(local.registro),
+        dashboard: local.dashboard || null,
         theme: local.theme || 'light',
         premium: local.premium !== undefined ? local.premium : true,
       });

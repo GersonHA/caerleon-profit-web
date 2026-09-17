@@ -29,6 +29,7 @@ Navegador (GitHub Pages) ──login + datos──> Supabase (Postgres + Auth + 
 1. Menú izquierdo → **SQL Editor** → **New query**.
 2. Pega **todo** el contenido de [`supabase/migrations/20260916000000_schema.sql`](supabase/migrations/20260916000000_schema.sql).
 3. **Run**. Debe terminar sin errores.
+4. Repite con [`supabase/migrations/20260917000000_dashboard.sql`](supabase/migrations/20260917000000_dashboard.sql), que añade dónde se guarda tu panel del Dashboard.
 
 ### 3. Crear tu usuario y cerrar el registro
 
@@ -98,6 +99,14 @@ clasifican.
 | Celular: Precios | los números se cortaban ("18" en vez de 186) | completos |
 | Celular: Registro | tabla ancha, filas muy altas | tarjetas compactas |
 | Ícono de la pestaña | no tenía (error 404) | ⚔️ |
+| **Dashboard (v7)** | | |
+| "En inventario" | solo contaba ventas marcadas como pendientes: una pieza crafteada sin vender salía como 0 | cuenta crafteadas y en venta, con su costo y lo que queda por cobrar |
+| Meta | el selector diaria/semanal/mensual se ignoraba, el progreso se topaba en 150% y usaba profit proyectado | usa su propio período, muestra el porcentaje real, lo que falta, el ritmo por día y la proyección |
+| Meta y período | se reiniciaban al recargar | se guardan en tu cuenta |
+| Paneles | fijos | eliges indicadores y paneles y los ordenas; se guarda en tu cuenta |
+| Profit por día | sumaba el profit proyectado de cada operación | suma la ganancia realmente cobrada |
+| Paneles nuevos | — | Inventario, Rentabilidad por item y tier, Acumulado del período |
+| Gráfico de estados | "Sin histórico" usaba el mismo morado que "Bulk Win" | gris, con orden fijo y porcentajes |
 
 Operaciones nuevas: nacen como **⚪ Crafteado** hasta que les registras un
 intento de venta. (En la versión anterior, al recargar la página se les creaba
@@ -118,6 +127,7 @@ styles.css          estilos originales + login y estado de la nube (al final)
 config.js           URL y clave pública de Supabase
 js/cloud-core.js    traducción app <-> tablas, guardado por diferencias, tiempo real
 js/cloud-ui.js      login, carga inicial, guardado automático, avisos
+js/dashboard-core.js períodos, KPIs, meta, inventario y series del Dashboard
 vendor/             supabase-js 2.116.0 (local, sin CDN)
 supabase/           esquema SQL y configuración del Supabase local
 tests/              pruebas (ver abajo)
@@ -127,7 +137,7 @@ tests/              pruebas (ver abajo)
 
 | Tabla | Contenido |
 |---|---|
-| `profiles` | Premium y tema |
+| `profiles` | Premium, tema y tu panel del Dashboard |
 | `material_prices` | runa / alma / reliquia por tier |
 | `sigil_prices` | Sello Real por tier |
 | `operations` | el registro |
@@ -156,9 +166,9 @@ npm test                  # todo: unitarias + integración + navegador
 
 | Suite | Qué verifica |
 |---|---|
-| `test:unit` (20) | el motor de cálculo es idéntico al original; solo cambió lo previsto; tus 43 operaciones y las 500 de muestra ida y vuelta sin perder nada; cálculo de diferencias |
+| `test:unit` (37) | el motor de cálculo es idéntico al original; solo cambió lo previsto; tus operaciones ida y vuelta sin perder nada; cálculo de diferencias; y los números del Dashboard (períodos, KPIs, meta, inventario) con tus datos reales |
 | `test:integration` (14) | registro cerrado; login; alta con precios por defecto; subir/editar/borrar exacto; >1000 filas; **un usuario no ve ni toca datos de otro**; sin sesión no se ve nada; tiempo real entre dispositivos |
-| `test:e2e` (14) | en Edge: login, importar tu JSON, calculadora, sellos, ventas, precios, tema, recarga, borrar, cerrar sesión, **PC ↔ celular en vivo**, subida de datos de la versión anterior, y cada arreglo de interfaz (orden, notas, filtros, colores, vista de celular) |
+| `test:e2e` (21) | en Edge: login, importar tu JSON, calculadora, sellos, ventas, precios, tema, recarga, borrar, cerrar sesión, **PC ↔ celular en vivo**, subida de datos de la versión anterior, cada arreglo de interfaz, y el Dashboard (inventario, meta, períodos y panel editable que viaja entre dispositivos) |
 
 Probar la página a mano con el Supabase local:
 
