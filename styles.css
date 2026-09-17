@@ -2186,9 +2186,17 @@ body.dash-editing .dash-panel {
 
 /* Separación entre paneles del Dashboard (antes quedaban pegados) */
 #dashPanels {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1rem;
+  align-items: start;
+}
+/* Los paneles anchos ocupan la fila entera; los de media columna se emparejan
+   (Distribución por estado a la izquierda y Meta a la derecha). */
+#dashPanels .dash-panel[data-ancho="full"] { grid-column: 1 / -1; }
+@media (max-width: 900px) {
+  #dashPanels { grid-template-columns: 1fr; }
+  #dashPanels .dash-panel { grid-column: auto; }
 }
 #dashPanels .dash-panel { margin-bottom: 0; }
 
@@ -2211,3 +2219,23 @@ body.dash-editing .dash-panel {
   font-size: 0.85rem;
 }
 .dash-formato .hint { margin: 0; flex-basis: 100%; }
+
+/* Indicadores: un poco más de aire cuando son cinco o más */
+.kpi-grid { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+
+/* Meta en media columna: medidor arriba, datos abajo */
+.meta-layout.meta-compacta { grid-template-columns: 1fr; gap: 0.5rem; }
+.meta-layout.meta-compacta .gauge-wrapper { margin: 0 auto; max-width: 320px; width: 100%; }
+
+/* Selector de formato en Configuración */
+#cfgFormato {
+  display: block;
+  width: 100%;
+  background-color: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 2.4rem 0.5rem 0.75rem;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.9rem;
+}

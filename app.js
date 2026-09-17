@@ -73,7 +73,7 @@ const ROYAL_SIGIL_IMG = {
 };
 
 const STORAGE_KEY = 'caerleon_profit_data_v1';
-const APP_VERSION = 'v7.0-dashboard';
+const APP_VERSION = 'v7.2-dashboard';
 const BACKUP_KEY = 'caerleon_profit_backup_v1';
 
 // =====================================================
@@ -280,6 +280,7 @@ function normalizeForCloud(registro) {
 
 // Vuelve a pintar todo con el state actual (tras cargar datos de la nube).
 function refreshAllViews() {
+  sincronizarSelectoresFormato();
   document.documentElement.dataset.theme = state.theme;
   updateThemeIcon();
   const premCalc = document.getElementById('cfgPremium');
@@ -417,12 +418,19 @@ function percentile(arr, p) {
 // FORMATTERS
 // =====================================================
 
-const fmtSilver = n => {
-  if (n === null || n === undefined || isNaN(n)) return '—';
-  return Math.round(n).toLocaleString('es-ES');
-};
+// Formato elegido en Configuración: 'entero' (13 M) | 'compacto' (12,9 M) |
+// 'completo' (12.852.615). Vale para toda la app: Calculadora, Sellos Reales,
+// Registro y Dashboard.
+function formatoNumeros() {
+  const guardado = state && state.dashboard && state.dashboard.numberFormat;
+  return guardado || 'entero';
+}
+
+const fmtSilver = n => CaerleonDash.formatSilver(n, formatoNumeros());
+
 const fmtSilver2 = n => {
   if (n === null || n === undefined || isNaN(n)) return '—';
+  if (formatoNumeros() !== 'completo') return CaerleonDash.formatSilver(n, formatoNumeros());
   return n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 // Texto escrito por el usuario (notas, etc.) -> seguro para insertar en HTML
@@ -435,10 +443,7 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-const fmtPct = n => {
-  if (n === null || n === undefined || isNaN(n)) return '—';
-  return (n * 100).toFixed(2) + '%';
-};
+const fmtPct = n => CaerleonDash.formatPercent(n, formatoNumeros());
 
 // =====================================================
 // UI - CALCULADORA
@@ -830,7 +835,7 @@ function localDateStr(d) {
 
 function fmt(n) {
   if (!isFinite(n)) return '∞';
-  return Math.round(n).toLocaleString('es-ES');
+  return CaerleonDash.formatSilver(n, formatoNumeros());
 }
 
 function updateRoyalCalc() {
@@ -1374,11 +1379,11 @@ const DASH_HELPERS = {
 // Silver y porcentajes con el formato elegido en "Personalizar".
 // Los tooltips pasan 'completo' para ver la cifra exacta al pasar el mouse.
 function dashSilver(n, modo) {
-  return CaerleonDash.formatSilver(n, modo || dashCfg().numberFormat);
+  return CaerleonDash.formatSilver(n, modo || formatoNumeros());
 }
 
 function dashPct(n, modo) {
-  return CaerleonDash.formatPercent(n, modo || dashCfg().numberFormat);
+  return CaerleonDash.formatPercent(n, modo || formatoNumeros());
 }
 
 function dashTaxRate() {
@@ -1398,7 +1403,7 @@ const DASH_DEFAULT = {
   goalPeriod: 'month',  // day | week | month
   numberFormat: 'entero', // entero (13 M) | compacto (12,9 M) | completo (12.852.615)
   kpis: ['realizado', 'inventario', 'roi', 'vendidos'],
-  panels: ['dia', 'flujo', 'meta', 'estado', 'inventario', 'tier', 'tipo', 'rentabilidad', 'top'],
+  panels: ['dia', 'flujo', 'estado', 'meta', 'inventario', 'tier', 'tipo', 'rentabilidad', 'top'],
 };
 
 function dashCfg() {
@@ -1412,9 +1417,24 @@ function dashCfg() {
 }
 
 function setDashCfg(patch, { rerender = true } = {}) {
+  const antes = dashCfg().numberFormat;
   state.dashboard = { ...dashCfg(), ...patch };
   saveState();
+  if (patch.numberFormat && patch.numberFormat !== antes) {
+    // El formato afecta a todas las pestañas
+    refreshAllViews();
+    sincronizarSelectoresFormato();
+    return;
+  }
   if (rerender) updateDashboard();
+}
+
+// Los dos selectores (Configuración y "Personalizar") muestran lo mismo
+function sincronizarSelectoresFormato() {
+  const valor = formatoNumeros();
+  document.querySelectorAll('[data-editor="formato"], #cfgFormato').forEach(sel => {
+    if (sel.value !== valor) sel.value = valor;
+  });
 }
 
 // -----------------------------------------------------
@@ -1535,12 +1555,14 @@ const DASH_PANELS = [
     id: 'meta',
     titulo: 'Meta',
     subtitulo: 'Progreso y ritmo necesario',
+    ancho: 'half',
     render: renderPanelMeta,
   },
   {
     id: 'estado',
     titulo: 'Distribución por estado',
     subtitulo: 'Cómo se reparten tus operaciones',
+    ancho: 'half',
     render: renderPanelEstado,
   },
   {
@@ -1553,12 +1575,14 @@ const DASH_PANELS = [
     id: 'tier',
     titulo: 'Profit por tier',
     subtitulo: 'Cuál te deja más silver',
+    ancho: 'half',
     render: renderPanelTier,
   },
   {
     id: 'tipo',
     titulo: 'Profit por tipo de objeto',
     subtitulo: 'Cuál item es tu fuerte',
+    ancho: 'half',
     render: renderPanelTipo,
   },
   {
@@ -1649,6 +1673,9 @@ function dashboardVisible() {
 // Controles: período, meta y modo edición
 // -----------------------------------------------------
 
+let metaTimer = null;
+let metaEditando = false;
+
 function bindDashControls() {
   document.querySelectorAll('[data-period]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1686,11 +1713,21 @@ function bindDashControls() {
 
   const metaAmount = document.getElementById('dashGoalAmount');
   if (metaAmount) {
-    let timer = null;
+    // Se guarda al dejar de escribir, y también al salir del campo o pulsar
+    // Enter: si no, tocar otro control antes de medio segundo perdía el valor.
+    const guardar = () => {
+      clearTimeout(metaTimer);
+      metaTimer = null;
+      metaEditando = false;
+      setDashCfg({ goalAmount: Math.max(0, parseFloat(metaAmount.value) || 0) });
+    };
     metaAmount.addEventListener('input', () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => setDashCfg({ goalAmount: Math.max(0, parseFloat(metaAmount.value) || 0) }), 500);
+      metaEditando = true;
+      clearTimeout(metaTimer);
+      metaTimer = setTimeout(guardar, 500);
     });
+    metaAmount.addEventListener('change', guardar);
+    metaAmount.addEventListener('blur', () => { if (metaEditando) guardar(); });
   }
   const metaPeriod = document.getElementById('dashGoalPeriod');
   if (metaPeriod) metaPeriod.addEventListener('change', () => setDashCfg({ goalPeriod: metaPeriod.value }));
@@ -1736,7 +1773,8 @@ function syncDashControls(d) {
   if (hasta && d.cfg.to) hasta.value = d.cfg.to;
 
   const amount = document.getElementById('dashGoalAmount');
-  if (amount && document.activeElement !== amount) amount.value = d.cfg.goalAmount;
+  // No pisar lo que estás escribiendo
+  if (amount && document.activeElement !== amount && !metaEditando) amount.value = d.cfg.goalAmount;
   const period = document.getElementById('dashGoalPeriod');
   if (period) period.value = d.cfg.goalPeriod;
 
@@ -1790,7 +1828,7 @@ function renderPanels(d) {
     const panel = DASH_PANELS.find(p => p.id === id);
     if (!panel) return '';
     return `
-      <div class="chart-card dash-panel" data-panel="${panel.id}">
+      <div class="chart-card dash-panel" data-panel="${panel.id}" data-ancho="${panel.ancho || 'full'}">
         <div class="chart-header-row">
           <div>
             <div class="chart-title">${escapeHtml(panel.titulo)}</div>
@@ -2154,7 +2192,7 @@ function renderPanelMeta(body, d) {
   const canvasId = 'chartMeta';
 
   body.innerHTML = `
-    <div class="meta-layout">
+    <div class="meta-layout meta-compacta">
       <div class="gauge-wrapper">
         <div class="chart-box" style="height:180px"><canvas id="${canvasId}"></canvas></div>
         <div class="gauge-center">
@@ -2436,6 +2474,12 @@ function initSettings() {
   document.getElementById('btnImport').addEventListener('click', () => document.getElementById('fileImport').click());
   document.getElementById('fileImport').addEventListener('change', importarJSON);
   document.getElementById('btnClear').addEventListener('click', borrarTodo);
+
+  const formato = document.getElementById('cfgFormato');
+  if (formato) {
+    formato.value = formatoNumeros();
+    formato.addEventListener('change', () => setDashCfg({ numberFormat: formato.value }));
+  }
 
   const btnRestore = document.getElementById('btnRestoreBackup');
   if (btnRestore) btnRestore.addEventListener('click', handleRestoreBackup);

@@ -5,13 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Calculadora de Profit de Caerleon</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ctext y=%22.9em%22 font-size=%2290%22%3E%E2%9A%94%EF%B8%8F%3C/text%3E%3C/svg%3E">
-<link rel="stylesheet" href="styles.css?v=7.0">
+<link rel="stylesheet" href="styles.css?v=7.2">
 <script src="chart.umd.min.js"></script>
 <script src="vendor/supabase.umd.js"></script>
-<script src="config.js?v=7.0"></script>
-<script src="js/cloud-core.js?v=7.0"></script>
-<script src="js/cloud-ui.js?v=7.0"></script>
-<script src="js/dashboard-core.js?v=7.0"></script>
+<script src="config.js?v=7.2"></script>
+<script src="js/cloud-core.js?v=7.2"></script>
+<script src="js/cloud-ui.js?v=7.2"></script>
+<script src="js/dashboard-core.js?v=7.2"></script>
 </head>
 <body data-screen="loading">
 
@@ -70,18 +70,18 @@
       </div>
     </div>
     <nav class="tabs">
-      <button class="tab active" data-tab="calc">Calculadora</button>
+      <button class="tab active" data-tab="dashboard">Dashboard</button>
+      <button class="tab" data-tab="calc">Calculadora</button>
       <button class="tab" data-tab="royal">Sellos Reales</button>
       <button class="tab" data-tab="precios">Precios</button>
       <button class="tab" data-tab="registro">Registro <span id="registroCount" class="badge">0</span></button>
-      <button class="tab" data-tab="dashboard">Dashboard</button>
       <button class="tab" data-tab="settings">Configuración</button>
     </nav>
   </header>
 
   <main class="main">
     <!-- ========== TAB: CALCULADORA ========== -->
-    <section id="tab-calc" class="tab-content active">
+    <section id="tab-calc" class="tab-content">
       <!-- Configuración -->
       <div class="card">
         <div class="card-header">⚙️ Configuración</div>
@@ -431,7 +431,7 @@
     </section>
 
     <!-- ========== TAB: DASHBOARD ========== -->
-    <section id="tab-dashboard" class="tab-content">
+    <section id="tab-dashboard" class="tab-content active">
       <!-- ===== BARRA DE CONTROLES ===== -->
       <div class="dash-toolbar">
         <div class="dash-periods" role="group" aria-label="Período">
@@ -530,6 +530,22 @@
         </div>
       </div>
 
+      <!-- ===== FORMATO DE NÚMEROS ===== -->
+      <div class="card">
+        <div class="card-header">🔢 Formato de números</div>
+        <div class="card-body">
+          <p class="hint" style="margin-top:0">
+            Cómo se muestran las cifras en toda la app: Calculadora, Sellos Reales,
+            Registro y Dashboard. En los gráficos, al pasar el mouse siempre ves la cifra exacta.
+          </p>
+          <select id="cfgFormato" class="input" style="max-width:22rem">
+            <option value="entero">Redondeados: 13 M · 350 k</option>
+            <option value="compacto">Con un decimal: 12,9 M · 350,4 k</option>
+            <option value="completo">Completos: 12.852.615</option>
+          </select>
+        </div>
+      </div>
+
       <!-- ===== BACKUP CARD (minimalist) ===== -->
       <div class="card">
         <div class="card-header">💾 Respaldo Local</div>
@@ -572,6 +588,6 @@
 
 <div id="toast" class="toast"></div>
 
-<script src="app.js?v=7.0"></script>
+<script src="app.js?v=7.2"></script>
 </body>
 </html>

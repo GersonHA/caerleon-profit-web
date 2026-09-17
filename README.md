@@ -99,6 +99,8 @@ clasifican.
 | Celular: Precios | los números se cortaban ("18" en vez de 186) | completos |
 | Celular: Registro | tabla ancha, filas muy altas | tarjetas compactas |
 | Ícono de la pestaña | no tenía (error 404) | ⚔️ |
+| Pestaña inicial | Calculadora | Dashboard (y va primera en la fila) |
+| Cifras | 12.852.615 en todas partes | redondeadas con k y M, con opción en Configuración (redondeadas, un decimal o completas); los tooltips siempre muestran la cifra exacta |
 | **Dashboard (v7)** | | |
 | "En inventario" | solo contaba ventas marcadas como pendientes: una pieza crafteada sin vender salía como 0 | cuenta crafteadas y en venta, con su costo y lo que queda por cobrar |
 | Meta | el selector diaria/semanal/mensual se ignoraba, el progreso se topaba en 150% y usaba profit proyectado | usa su propio período, muestra el porcentaje real, lo que falta, el ritmo por día y la proyección |
