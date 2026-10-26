@@ -73,7 +73,7 @@ const ROYAL_SIGIL_IMG = {
 };
 
 const STORAGE_KEY = 'caerleon_profit_data_v1';
-const APP_VERSION = 'v7.2-dashboard';
+const APP_VERSION = 'v7.3-comparador';
 const BACKUP_KEY = 'caerleon_profit_backup_v1';
 
 // =====================================================
@@ -521,6 +521,9 @@ function updateCalculadora() {
   document.getElementById('rROI').textContent = fmtPct(r.roi);
   document.getElementById('rBreakeven').textContent = fmtSilver(r.breakeven);
   document.getElementById('rEficiencia').textContent = fmtPct(r.eficiencia);
+  const pm = CaerleonCompare.porMaterial(r, op);
+  document.getElementById('rProfitMat').textContent = r.matQtyTotal > 0 ? fmtSilver(pm.gananciaPorMaterial) : '—';
+  document.getElementById('rMaxBase').textContent = fmtSilver(pm.maxPrecioBase);
 
   // Meta line (información secundaria)
   document.getElementById('rIP').textContent = fmtSilver(r.ip);
@@ -531,7 +534,7 @@ function updateCalculadora() {
   const profitEl = document.getElementById('rProfit');
   profitEl.style.color = r.profit > 0 ? 'var(--success)' : r.profit < 0 ? 'var(--danger)' : 'var(--text-primary)';
   // Las tarjetas de ganancia eran siempre verdes, incluso con pérdida
-  ['rProfit', 'rProfitUnit'].forEach(id => {
+  ['rProfit', 'rProfitUnit', 'rProfitMat'].forEach(id => {
     const card = document.getElementById(id).closest('.result-item');
     card.classList.toggle('success', r.profit >= 0);
     card.classList.toggle('danger', r.profit < 0);
@@ -899,6 +902,14 @@ function updateRoyalCalc() {
   document.getElementById('royalROI').textContent = fmt(r.roi) + '%';
   document.getElementById('royalMargin').textContent = fmt(r.margin) + '%';
   document.getElementById('royalProfitUnit').textContent = fmt(r.profitUnit);
+
+  // Por sello: lo que rinde cada sello y hasta cuánto puedes pagar
+  const ps = CaerleonCompare.porSello(r, inp);
+  document.getElementById('royalProfitSigil').textContent = fmt(ps.gananciaPorSello);
+  document.getElementById('royalMaxSigil').textContent = fmt(ps.maxPrecioSello);
+  document.getElementById('royalMaxBase').textContent = fmt(ps.maxPrecioBase);
+
+  updateComparador();
 }
 
 function registerRoyalOperation() {
@@ -1014,8 +1025,103 @@ function initPrecios() {
 
 // Auto-fill sigil price in Royal tab when tier changes
 function updateRoyalSigilPrice() {
-  // No-op now — sigil price is read directly from state.sellos in getRoyalInputs()
-  // Kept for backward compatibility (called from autoSavePrecio)
+  // El precio se lee de state.sellos en getRoyalInputs(); aquí solo se recalcula
+  // Sellos Reales y el comparador cuando cambia en la pestaña Precios.
+  updateRoyalCalc();
+}
+
+// =====================================================
+// UI - COMPARAR PIEZAS (Sellos Reales)
+// =====================================================
+
+// Precios escritos en el comparador, por pieza (no se guardan en la nube)
+const cmpPrecios = {
+  helmet: { base: 0, venta: 0 },
+  chest:  { base: 0, venta: 0 },
+  boots:  { base: 0, venta: 0 },
+};
+
+function initComparador() {
+  const tbody = document.getElementById('cmpBody');
+  tbody.innerHTML = Object.entries(ROYAL_SLOTS).map(([key, slot]) => `
+    <tr data-slot="${key}">
+      <td><div class="mat-cell-inline"><img class="mat-icon-sm" data-cmp-icon alt="">${slot.name}</div></td>
+      <td data-cmp="sellos">0</td>
+      <td><input type="number" data-cmp-in="base" min="0" step="1" value="0" aria-label="Precio item base ${slot.name}"></td>
+      <td><input type="number" data-cmp-in="venta" min="0" step="1" value="0" aria-label="Precio venta ${slot.name}"></td>
+      <td data-cmp="costoSellos">0</td>
+      <td data-cmp="inversion">0</td>
+      <td data-cmp="ganancia">0</td>
+      <td data-cmp="gananciaPorSello">0</td>
+      <td data-cmp="roi">0%</td>
+      <td data-cmp="maxPrecioBase">0</td>
+    </tr>`).join('');
+
+  tbody.addEventListener('input', e => {
+    const campo = e.target.dataset.cmpIn;
+    if (!campo) return;
+    const slot = e.target.closest('tr').dataset.slot;
+    cmpPrecios[slot][campo] = Math.max(0, parseFloat(e.target.value) || 0);
+    updateComparador();
+  });
+  ['cmpTier', 'cmpMaterial', 'cmpCraftFee'].forEach(id =>
+    document.getElementById(id).addEventListener('input', updateComparador));
+
+  updateComparador();
+}
+
+function updateComparador() {
+  const tbody = document.getElementById('cmpBody');
+  if (!tbody || !tbody.children.length) return;
+  const tier = parseInt(document.getElementById('cmpTier').value) || 6;
+  const material = document.getElementById('cmpMaterial').value;
+  const craftFee = Math.max(0, parseFloat(document.getElementById('cmpCraftFee').value) || 0);
+  const sigilPrice = (state.sellos && state.sellos[tier]) || 0;
+
+  document.getElementById('cmpSigilName').textContent = ROYAL_TIER_NAMES[tier];
+  document.getElementById('cmpSigilPrice').textContent = fmt(sigilPrice);
+
+  // Cada pieza pasa por calcRoyal (1 unidad): misma cuenta que la calculadora
+  const piezas = Object.entries(ROYAL_SLOTS).map(([key, slot]) => {
+    const inp = {
+      slot: key, tier, material, qty: 1, sigilPrice, craftFee,
+      basePrice: cmpPrecios[key].base,
+      sellPrice: cmpPrecios[key].venta,
+    };
+    return { slot: key, nombre: slot.name, inp, r: calcRoyal(inp) };
+  });
+  const res = CaerleonCompare.comparar(piezas);
+
+  res.filas.forEach(f => {
+    const tr = tbody.querySelector(`tr[data-slot="${f.slot}"]`);
+    const icon = tr.querySelector('[data-cmp-icon]');
+    icon.src = imgUrl(`T${tier}_${ROYAL_SLOTS[f.slot].slot}_${ROYAL_MATERIAL_NAMES[material]}_ROYAL`);
+    const celda = campo => tr.querySelector(`[data-cmp="${campo}"]`);
+    celda('sellos').textContent = f.sellos;
+    ['costoSellos', 'inversion', 'maxPrecioBase'].forEach(c => { celda(c).textContent = fmt(f[c]); });
+    const vacio = !f.completa;
+    celda('ganancia').textContent = vacio ? '—' : fmt(f.ganancia);
+    celda('gananciaPorSello').textContent = vacio ? '—' : fmt(f.gananciaPorSello);
+    celda('roi').textContent = vacio ? '—' : fmtPct(f.roi);
+    ['ganancia', 'gananciaPorSello', 'roi'].forEach(c => {
+      celda(c).classList.toggle('cmp-pos', !vacio && f[c] > 0);
+      celda(c).classList.toggle('cmp-neg', !vacio && f[c] < 0);
+      celda(c).classList.toggle('cmp-best', res.mejor[c] === f.slot);
+    });
+  });
+
+  const nombre = slot => ROYAL_SLOTS[slot].name;
+  const verdict = document.getElementById('cmpVerdict');
+  if (res.completas === 0) {
+    verdict.innerHTML = '<span class="hint">Llena precio del item base y de venta en al menos una pieza.</span>';
+  } else if (!res.mejor.ganancia) {
+    verdict.innerHTML = '<span class="cmp-neg">❌ Ninguna pieza da ganancia con estos precios.</span>';
+  } else {
+    verdict.innerHTML = `
+      <div>🏆 Más ganancia por pieza: <strong>${nombre(res.mejor.ganancia)}</strong></div>
+      <div>👑 Más ganancia por sello: <strong>${nombre(res.mejor.gananciaPorSello)}</strong> <span class="hint">(mira esta si tienes pocos sellos)</span></div>
+      <div>📈 Mejor ROI: <strong>${nombre(res.mejor.roi)}</strong> <span class="hint">(mira esta si tienes poca plata)</span></div>`;
+  }
 }
 
 // =====================================================
@@ -2648,6 +2754,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initCustomSelects();
   initCalculadora();
   initRoyal();
+  initComparador();
   initPrecios();
   initRegistro();
   initDashboard();

@@ -2239,3 +2239,60 @@ body.dash-editing .dash-panel {
   font-family: inherit;
   font-size: 0.9rem;
 }
+
+/* ========== v7.3: LÍMITES POR SELLO Y COMPARADOR ========== */
+.royal-limits {
+  display: flex;
+  flex-direction: column;
+  margin-top: 0.75rem;
+}
+.royal-limits .cost-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.35rem 0;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+.royal-limits .cost-row span:last-child { color: var(--text-primary); font-weight: 600; }
+
+.cmp-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  align-items: end;
+}
+#cmpTier, #cmpMaterial {
+  display: block;
+  width: 100%;
+  background-color: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 2.4rem 0.5rem 0.75rem;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.9rem;
+}
+.cmp-sigil {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+  padding-bottom: 0.5rem;
+}
+.cmp-table th, .cmp-table td { white-space: nowrap; }
+.cmp-table input { min-width: 7rem; }
+.cmp-pos { color: var(--success); }
+.cmp-neg { color: var(--danger); }
+.cmp-table td.cmp-best {
+  font-weight: 700;
+  background: var(--accent-dim);
+}
+.cmp-verdict {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 1rem;
+  font-size: 0.95rem;
+}

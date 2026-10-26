@@ -5,13 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Calculadora de Profit de Caerleon</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ctext y=%22.9em%22 font-size=%2290%22%3E%E2%9A%94%EF%B8%8F%3C/text%3E%3C/svg%3E">
-<link rel="stylesheet" href="styles.css?v=7.2">
+<link rel="stylesheet" href="styles.css?v=7.3">
 <script src="chart.umd.min.js"></script>
 <script src="vendor/supabase.umd.js"></script>
-<script src="config.js?v=7.2"></script>
-<script src="js/cloud-core.js?v=7.2"></script>
-<script src="js/cloud-ui.js?v=7.2"></script>
-<script src="js/dashboard-core.js?v=7.2"></script>
+<script src="config.js?v=7.3"></script>
+<script src="js/cloud-core.js?v=7.3"></script>
+<script src="js/cloud-ui.js?v=7.3"></script>
+<script src="js/dashboard-core.js?v=7.3"></script>
+<script src="js/compare-core.js?v=7.3"></script>
 </head>
 <body data-screen="loading">
 
@@ -180,6 +181,8 @@
           <div class="result-item"><span class="result-label">ROI %</span><span class="result-val" id="rROI">—</span></div>
           <div class="result-item"><span class="result-label">Break-even price</span><span class="result-val" id="rBreakeven">—</span></div>
           <div class="result-item"><span class="result-label">Eficiencia material %</span><span class="result-val" id="rEficiencia">—</span></div>
+          <div class="result-item success"><span class="result-label">Ganancia / material</span><span class="result-val" id="rProfitMat">—</span></div>
+          <div class="result-item"><span class="result-label">Máx. a pagar item base</span><span class="result-val" id="rMaxBase">—</span></div>
         </div>
         <div class="card-meta-line" id="cardMetaLine">
           <span>IP: <span id="rIP">—</span></span>
@@ -340,6 +343,11 @@
                 <div class="metric-pill"><span class="metric-lbl">ROI</span><span id="royalROI">0%</span></div>
                 <div class="metric-pill"><span class="metric-lbl">Margen</span><span id="royalMargin">0%</span></div>
                 <div class="metric-pill"><span class="metric-lbl">Ganancia/unidad</span><span id="royalProfitUnit">0</span></div>
+                <div class="metric-pill"><span class="metric-lbl">Ganancia/sello</span><span id="royalProfitSigil">0</span></div>
+              </div>
+              <div class="royal-limits">
+                <div class="cost-row"><span>Máx. a pagar por sello</span><span id="royalMaxSigil">0</span></div>
+                <div class="cost-row"><span>Máx. a pagar por item base</span><span id="royalMaxBase">0</span></div>
               </div>
               <div class="row gap-2" style="margin-top: 1rem;">
                 <button id="royalRegister" class="btn btn-primary">📝 Registrar operación</button>
@@ -347,6 +355,46 @@
               </div>
             </div>
           </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">⚖️ Comparar piezas</div>
+        <div class="card-body">
+          <p class="hint" style="margin-top:0;">Pon el precio del item liso y lo que pagan en el Mercado Negro por cada pieza. Usa el precio del sello de la pestaña Precios.</p>
+          <div class="cmp-controls">
+            <div>
+              <label for="cmpTier" class="label">Nivel</label>
+              <select id="cmpTier">
+                <option value="4">T4</option><option value="5">T5</option><option value="6" selected>T6</option>
+              </select>
+            </div>
+            <div>
+              <label for="cmpMaterial" class="label">Material</label>
+              <select id="cmpMaterial">
+                <option value="cloth">Tela</option><option value="leather">Cuero</option><option value="plate">Placa</option>
+              </select>
+            </div>
+            <div>
+              <label for="cmpCraftFee" class="label">Costo crafteo (por pieza)</label>
+              <input type="number" id="cmpCraftFee" class="input" value="2500" min="0" step="100">
+            </div>
+            <div class="cmp-sigil">
+              <span class="label">Sello</span>
+              <span><span id="cmpSigilName">—</span>: <strong id="cmpSigilPrice">0</strong></span>
+            </div>
+          </div>
+          <div class="table-scroll">
+            <table class="data-table editable-table cmp-table">
+              <thead><tr>
+                <th>Pieza</th><th>Sellos</th><th>Precio item base</th><th>Precio venta MN</th>
+                <th>Costo sellos</th><th>Inversión</th><th>Ganancia</th>
+                <th>Ganancia/sello</th><th>ROI</th><th>Máx. item base</th>
+              </tr></thead>
+              <tbody id="cmpBody"></tbody>
+            </table>
+          </div>
+          <div class="cmp-verdict" id="cmpVerdict"></div>
         </div>
       </div>
     </section>
@@ -588,6 +636,6 @@
 
 <div id="toast" class="toast"></div>
 
-<script src="app.js?v=7.2"></script>
+<script src="app.js?v=7.3"></script>
 </body>
 </html>
