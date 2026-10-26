@@ -1064,7 +1064,7 @@ function initComparador() {
     cmpPrecios[slot][campo] = Math.max(0, parseFloat(e.target.value) || 0);
     updateComparador();
   });
-  ['cmpTier', 'cmpMaterial', 'cmpCraftFee'].forEach(id =>
+  ['cmpTier', 'cmpCraftFee'].forEach(id =>
     document.getElementById(id).addEventListener('input', updateComparador));
 
   updateComparador();
@@ -1074,7 +1074,6 @@ function updateComparador() {
   const tbody = document.getElementById('cmpBody');
   if (!tbody || !tbody.children.length) return;
   const tier = parseInt(document.getElementById('cmpTier').value) || 6;
-  const material = document.getElementById('cmpMaterial').value;
   const craftFee = Math.max(0, parseFloat(document.getElementById('cmpCraftFee').value) || 0);
   const sigilPrice = (state.sellos && state.sellos[tier]) || 0;
 
@@ -1084,7 +1083,7 @@ function updateComparador() {
   // Cada pieza pasa por calcRoyal (1 unidad): misma cuenta que la calculadora
   const piezas = Object.entries(ROYAL_SLOTS).map(([key, slot]) => {
     const inp = {
-      slot: key, tier, material, qty: 1, sigilPrice, craftFee,
+      slot: key, tier, material: 'cloth', qty: 1, sigilPrice, craftFee,
       basePrice: cmpPrecios[key].base,
       sellPrice: cmpPrecios[key].venta,
     };
@@ -1095,7 +1094,7 @@ function updateComparador() {
   res.filas.forEach(f => {
     const tr = tbody.querySelector(`tr[data-slot="${f.slot}"]`);
     const icon = tr.querySelector('[data-cmp-icon]');
-    icon.src = imgUrl(`T${tier}_${ROYAL_SLOTS[f.slot].slot}_${ROYAL_MATERIAL_NAMES[material]}_ROYAL`);
+    icon.src = imgUrl(`T${tier}_${ROYAL_SLOTS[f.slot].slot}_CLOTH_ROYAL`);
     const celda = campo => tr.querySelector(`[data-cmp="${campo}"]`);
     celda('sellos').textContent = f.sellos;
     ['costoSellos', 'inversion', 'maxPrecioBase'].forEach(c => { celda(c).textContent = fmt(f[c]); });
@@ -2099,7 +2098,8 @@ function sinDatos(body, texto) {
 // -----------------------------------------------------
 
 function renderPanelDia(body, d) {
-  const serie = CaerleonDash.dailySeries(d.ops, d.range, d.prev, DASH_HELPERS);
+  // Las barras del período anterior salen de opsPrev (antes quedaban siempre en 0)
+  const serie = CaerleonDash.dailySeries([...d.ops, ...d.opsPrev], d.range, d.prev, DASH_HELPERS);
   if (!serie.dias) return sinDatos(body, 'Sin días en este período.');
 
   const totalActual = serie.actual.reduce((a, b) => a + b, 0);
@@ -2144,7 +2144,10 @@ function renderPanelDia(body, d) {
       interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: { display: true, position: 'bottom', labels: { color: getCss('--chart-text'), boxWidth: 10, usePointStyle: true } },
-        tooltip: tooltipMoneda(),
+        // La barra gris es el mismo día del período anterior: se muestra su fecha
+        tooltip: tooltipMoneda({
+          title: items => `${serie.labels[items[0].dataIndex]} (anterior: ${serie.labelsAnterior[items[0].dataIndex]})`,
+        }),
       },
       scales: ejes(),
     },
@@ -2152,7 +2155,8 @@ function renderPanelDia(body, d) {
 }
 
 function renderPanelAcumulado(body, d) {
-  const serie = CaerleonDash.dailySeries(d.ops, d.range, d.prev, DASH_HELPERS);
+  // Las barras del período anterior salen de opsPrev (antes quedaban siempre en 0)
+  const serie = CaerleonDash.dailySeries([...d.ops, ...d.opsPrev], d.range, d.prev, DASH_HELPERS);
   const acumulado = CaerleonDash.cumulativeSeries(serie);
   if (!acumulado.length) return sinDatos(body, 'Sin operaciones en este período.');
 

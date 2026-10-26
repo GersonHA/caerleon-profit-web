@@ -306,16 +306,18 @@
     });
 
     const labels = [];
+    const labelsAnterior = [];
     const actual = [];
     const anterior = [];
     for (let i = 0; i < dias; i++) {
       const d = addDays(range.from, i);
       const p = addDays(prev.from, i);
       labels.push(`${d.getDate()}/${d.getMonth() + 1}`);
+      labelsAnterior.push(`${p.getDate()}/${p.getMonth() + 1}`);
       actual.push(porDia.get(dateKey(d)) || 0);
       anterior.push(porDia.get(dateKey(p)) || 0);
     }
-    return { labels, actual, anterior, dias };
+    return { labels, labelsAnterior, actual, anterior, dias };
   }
 
   /** Lo que paga el Mercado Negro por una operación ya vendida (sin descontar impuesto). */

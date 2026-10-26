@@ -2263,7 +2263,7 @@ body.dash-editing .dash-panel {
   margin-bottom: 1rem;
   align-items: end;
 }
-#cmpTier, #cmpMaterial {
+#cmpTier {
   display: block;
   width: 100%;
   background-color: var(--bg-input);
